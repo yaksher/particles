@@ -299,7 +299,7 @@ void draw_frame(SDL_Renderer *renderer, view_t *state, shared_data_t *shared, do
         .h = h
     };
     SDL_RenderDrawRect(renderer, &rect);
-    double norm_fps = mean_fps / 240;
+    double norm_fps = fmin(mean_fps / 480, 1);
     rect.h = h * norm_fps;
     rect.y = off + h - rect.h;
     SDL_RenderFillRect(renderer, &rect);
@@ -385,20 +385,16 @@ int main(int argc, char *argv[]) {
     }
 
     uint64_t last_frame = SDL_GetTicks64();
-    double mean_fps = 60;
+    double mean_frame_time = 0;
     // Event loop
     while (true) {
         // Handle events on queue
         if (process_events(&state, &shared)) {
             break;
         }
-        draw_frame(renderer, &state, &shared, mean_fps);
+        draw_frame(renderer, &state, &shared, 1000 / mean_frame_time);
         uint64_t frame_time = SDL_GetTicks64() - last_frame;
-        if (4 * frame_time < state.frame_time) {
-            mean_fps = 0.9 * mean_fps + 0.1 * 1000.0 * 4 / state.frame_time;
-        } else {
-            mean_fps = 0.9 * mean_fps + 0.1 * 1000.0 / frame_time;
-        }
+        mean_frame_time = 0.9 * mean_frame_time + 0.1 * frame_time;
         int64_t time_left = state.frame_time - frame_time;
         if (time_left > 0) {
             SDL_Delay(time_left);
