@@ -14,3 +14,6 @@ build: main.o simulation.o
 main.o: main.c simulation.h
 
 simulation.o: simulation.c simulation.h
+
+clean:
+	rm -f particles *.o
