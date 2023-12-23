@@ -198,19 +198,33 @@ uint32_t round_up_to_mul_8(uint32_t v) {
 
 // draws a circle with radius r at center, using the point buffer to store the points
 // the point buffer must be at least 4r^2 + 1 points long
-// TODO: Optimize to draw a square and then fill in the edges
-void draw_circle(SDL_Renderer *renderer, SDL_Point center, pt_t radius, SDL_Point *point_buffer) {
-    // array of points, upper bounded by 4r^2 + 1
+void draw_circle(SDL_Renderer *renderer, SDL_Point center, pt_t radius, SDL_Point *point_buffer) {    
+    // draw the largest inscribed square
+    const double SQRT2 = 1.414213562373;
+    pt_t square_halfside = radius / SQRT2;
+    while (2 * (square_halfside + 1) * (square_halfside + 1) <= radius * radius) {
+        square_halfside++;
+    }
+    SDL_Rect rect = {
+        .x = center.x - square_halfside,
+        .y = center.y - square_halfside,
+        .w = square_halfside * 2,
+        .h = square_halfside * 2
+    };
+    SDL_RenderFillRect(renderer, &rect);
+
     size_t num_points = 0;
-    for (pt_t w = 0; w < radius * 2 + 1; w++) {
-        for (pt_t h = 0; h < radius * 2 + 1; h++) {
-            int dx = radius - w; // horizontal offset
-            int dy = radius - h; // vertical offset
-            if ((dx*dx + dy*dy) <= (radius * radius)) {
-                point_buffer[num_points++] = (SDL_Point) { center.x + dx, center.y + dy };
+    for (pt_t w = -square_halfside; w <= square_halfside; w++) {
+        for (pt_t h = square_halfside; h < radius + 1; h++) {
+            if (w * w + h * h <= radius * radius) {
+                point_buffer[num_points++] = (SDL_Point) { center.x + w, center.y + h };
+                point_buffer[num_points++] = (SDL_Point) { center.x + w, center.y - h };
+                point_buffer[num_points++] = (SDL_Point) { center.x - h, center.y + w };
+                point_buffer[num_points++] = (SDL_Point) { center.x + h, center.y - w };
             }
         }
     }
+    
     SDL_RenderDrawPoints(renderer, point_buffer, num_points);
 }
 
@@ -254,8 +268,9 @@ void draw_frame(SDL_Renderer *renderer, view_t *state, shared_data_t *shared, do
     for (size_t i = 0; i < num_circles; i++) {
         SDL_Point center = pos_world_to_screen(state, circles[i].center);
         pt_t radius = len_world_to_screen(state, circles[i].radius);
-        if (radius * radius * 4 + 1 > point_buf_size) {
-            point_buf_size = radius * radius * 4 + 1;
+        size_t min_points = radius * radius * 4 + 1;
+        if (point_buf_size < min_points) {
+            point_buf_size = min_points;
             free(circle_point_buffer);
             circle_point_buffer = malloc(point_buf_size * sizeof(SDL_Point));
         }
