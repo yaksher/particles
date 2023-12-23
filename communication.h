@@ -27,9 +27,11 @@ typedef struct {
 typedef enum {
     INPUT_TYPE_FORCE_POINT,
     INPUT_TYPE_SPAWN,
+    INPUT_TYPE_COMMAND,
 } input_type_t;
 
 typedef union {
+    input_type_t type;
     struct {
         input_type_t type;
         point_t point;
@@ -44,6 +46,15 @@ typedef union {
         float mass;
         float charge;
     } spawn;
+    struct {
+        input_type_t type;
+        enum {
+            COMMAND_TYPE_PAUSE,
+            COMMAND_TYPE_RESUME,
+            COMMAND_TYPE_RESET,
+            COMMAND_TYPE_QUIT,
+        } command_type;
+    } command;
 } input_t;
 
 typedef struct {
