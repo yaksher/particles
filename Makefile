@@ -8,6 +8,8 @@ default: build
 run: build
 	./particles
 
+force: clean build
+
 build: main.o simulation.o
 	$(CC) $(CFLAGS) -o particles main.o simulation.o $(LDLIBS)
 
