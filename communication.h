@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdlib.h>
+#include <stdatomic.h>
 
 // a point in world coordinates
 typedef struct {
@@ -44,3 +45,8 @@ typedef union {
         float charge;
     } spawn;
 } input_t;
+
+typedef struct {
+    frame_t * _Atomic frame;
+    input_t * _Atomic input;
+} shared_data_t;

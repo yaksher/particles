@@ -116,7 +116,7 @@ void step(world_t *, world_time_t, float);
 // #define GLOBAL_CLUSTERING
 
 void *simulate(void *arg) {
-    frame_t * _Atomic *frame_shared = arg;
+    shared_data_t *shared = arg;
     const size_t NUM_PARTICLES = 1000;
     world_t world = {
         .gravity = 180,
@@ -178,7 +178,7 @@ void *simulate(void *arg) {
     double lost_time = 0;
     while (true) {
         step(&world, 1.0 / TARGET_TPS + lost_time, 5);
-        free(atomic_exchange_explicit(frame_shared, make_frame(&world), __ATOMIC_RELAXED));
+        free(atomic_exchange_explicit(&shared->frame, make_frame(&world), __ATOMIC_RELAXED));
         lost_time = (double) wait_tick(&last_tick, target_nsecs) / BILLION;
     }
 

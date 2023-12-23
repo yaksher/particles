@@ -195,7 +195,7 @@ SDL_Point pos_world_to_screen(view_t *state, point_t pos) {
     };
 }
 
-void draw_frame(SDL_Renderer *renderer, view_t *state, frame_t *_Atomic *frame_shared, double mean_fps) {
+void draw_frame(SDL_Renderer *renderer, view_t *state, shared_data_t *shared, double mean_fps) {
     static frame_t *last_frame = NULL;
     // Initialize renderer color black for the background
     SDL_SetRenderDrawColor(renderer, 0x00, 0x00, 0x00, 0xFF);
@@ -205,7 +205,7 @@ void draw_frame(SDL_Renderer *renderer, view_t *state, frame_t *_Atomic *frame_s
 
     // aligned access is atomic; we'll see a coherent frame, regardless of what
     // the simulation thread is doing
-    frame_t *frame = atomic_exchange_explicit(frame_shared, NULL, __ATOMIC_RELAXED);
+    frame_t *frame = atomic_exchange_explicit(&shared->frame, NULL, __ATOMIC_RELAXED);
     if (!frame) {
         // if we didn't get a frame, just use the last one
         frame = last_frame;
@@ -278,14 +278,17 @@ int main(int argc, char *argv[]) {
 
     // start simulation
     pthread_t simulation_thread;
-    frame_t *_Atomic frame = NULL;
+    shared_data_t shared = {
+            .frame = NULL,
+            .input = NULL
+    };
     view_t state = {
             .scale = 0.5,
             .frame_time = 1000/60,
             .window_width = DEFAULT_SCREEN_WIDTH,
             .window_height = DEFAULT_SCREEN_HEIGHT
     };
-    if (pthread_create(&simulation_thread, NULL, simulate, &frame)) {
+    if (pthread_create(&simulation_thread, NULL, simulate, &shared)) {
         fprintf(stderr, "Failed to create simulation thread!\n");
         return EXIT_FAILURE;
     }
@@ -350,7 +353,7 @@ int main(int argc, char *argv[]) {
         if (process_events(&state)) {
             break;
         }
-        draw_frame(renderer, &state, &frame, mean_fps);
+        draw_frame(renderer, &state, &shared, mean_fps);
         uint64_t frame_time = SDL_GetTicks64() - last_frame;
         if (4 * frame_time < state.frame_time) {
             mean_fps = 0.9 * mean_fps + 0.1 * 1000.0 * 4 / state.frame_time;
