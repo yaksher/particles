@@ -23,7 +23,6 @@ typedef struct {
 typedef struct {
     size_t num_particles;
     particle_t *particles;
-    bool paused;
     double gravity;
     double coulomb;
     double collision;
@@ -107,16 +106,19 @@ uint64_t wait_tick(struct timespec *last_tick, uint64_t target_nsecs) {
     }
 }
 
+void step(world_t *, world_time_t, float);
+
 // FEATURES:
 #define GRAVITY
 // #define COULOMB
 // #define COLLISION
 #define CLUSTERING
 // #define GLOBAL_CLUSTERING
-void init_world(world_t *world) {
+
+void *simulate(void *arg) {
+    shared_data_t *shared = arg;
     const size_t NUM_PARTICLES = 1000;
-    *world = (world_t) {
-        .paused = false,
+    world_t world = {
         .gravity = 180,
         .coulomb = 0,
         .collision = 0,
@@ -125,17 +127,17 @@ void init_world(world_t *world) {
         .num_particles = NUM_PARTICLES,
         .particles = malloc(NUM_PARTICLES * sizeof(particle_t))
     };
-    world->particles[0].center.x = 0;
-    world->particles[0].center.y = 0;
-    world->particles[0].velocity.x = 0;
-    world->particles[0].velocity.y = 0;
-    world->particles[0].mass = 100000;
-    world->particles[0].charge = 0;
-    world->particles[0].clustering = 0;
-    world->particles[0].radius = 50;
+    world.particles[0].center.x = 0;
+    world.particles[0].center.y = 0;
+    world.particles[0].velocity.x = 0;
+    world.particles[0].velocity.y = 0;
+    world.particles[0].mass = 100000;
+    world.particles[0].charge = 0;
+    world.particles[0].clustering = 0;
+    world.particles[0].radius = 50;
     const float RING_RADIUS = 800;
     const float VELOCITY = 4;
-    for (size_t i = 1; i < world->num_particles; i++) {
+    for (size_t i = 1; i < world.num_particles; i++) {
         particle_t particle;
         // Init position:
         // pick a random direction
@@ -167,92 +169,15 @@ void init_world(world_t *world) {
         // particle.charge = unif_rand() * 2 * CHARGE_RANGE - CHARGE_RANGE;
         particle.charge = unif_rand() < 0.5 ? CHARGE_RANGE : -CHARGE_RANGE;
         particle.clustering = 1;
-        world->particles[i] = particle;
+        world.particles[i] = particle;
     }
-}
-
-void step(world_t *, world_time_t, float);
-
-void process_input(input_t *input, world_t *world, world_time_t dt) {
-    if (input == NULL) {
-        return;
-    }
-    switch (input->type) {
-        case INPUT_TYPE_FORCE_POINT: {
-            input_force_point_t *force_point = &input->force_point;
-            for (size_t i = 0; i < world->num_particles; i++) {
-                float dx = world->particles[i].center.x - force_point->point.x;
-                float dy = world->particles[i].center.y - force_point->point.y;
-                float dist_sq = dx * dx + dy * dy;
-                float dist = sqrtf(dist_sq);
-                float force = 0;
-                switch (force_point->force_type) {
-                    case FORCE_TYPE_GRAVITY:
-                        force = world->gravity * world->particles[i].mass * force_point->strength / dist_sq;
-                        break;
-                    case FORCE_TYPE_COULOMB:
-                        force = world->coulomb * world->particles[i].charge * force_point->strength / dist_sq;
-                        break;
-                }
-                force *= dt;
-                vec_t force_vec = {
-                    .x = force * dx / dist,
-                    .y = force * dy / dist
-                };
-                world->particles[i].velocity.x += force_vec.x / world->particles[i].mass;
-                world->particles[i].velocity.y += force_vec.y / world->particles[i].mass;
-            }
-            break;
-        }
-        case INPUT_TYPE_SPAWN: {
-            input_spawn_t *spawn = &input->spawn;
-            world->particles = realloc(world->particles, (world->num_particles + 1) * sizeof(particle_t));
-            particle_t particle;
-            particle.center.x = spawn->point.x;
-            particle.center.y = spawn->point.y;
-            particle.velocity.x = 0;
-            particle.velocity.y = 0;
-            particle.mass = spawn->mass;
-            particle.charge = spawn->charge;
-            particle.clustering = 1;
-            particle.radius = radius_of_mass(particle.mass);
-            world->particles[world->num_particles] = particle;
-            world->num_particles++;
-            break;
-        }
-        case INPUT_TYPE_COMMAND: {
-            input_command_t *command = &input->command;
-            switch (command->command_type) {
-                case COMMAND_TYPE_PAUSE:
-                    world->paused = true;
-                    break;
-                case COMMAND_TYPE_RESUME:
-                    world->paused = false;
-                    break;
-                case COMMAND_TYPE_RESET:
-                    init_world(world);
-                    break;
-            }
-            break;
-        }
-    }
-}
-
-void *simulate(void *arg) {
-    shared_data_t *shared = arg;
-    world_t world;
-    init_world(&world);
     const uint64_t TARGET_TPS = 120;
-    const world_time_t TICK = 1.0 / TARGET_TPS;
     uint64_t target_nsecs = BILLION / TARGET_TPS;
     struct timespec last_tick;
     clock_gettime(CLOCK_MONOTONIC, &last_tick);
     double lost_time = 0;
     while (true) {
-        input_t *input = atomic_exchange_explicit(&shared->input, NULL, __ATOMIC_RELAXED);
-        world_time_t dt = world.paused ? 0 : TICK + lost_time;
-        process_input(input, &world, dt);
-        step(&world, dt, 5);
+        step(&world, 1.0 / TARGET_TPS + lost_time, 5);
         free(atomic_exchange_explicit(&shared->frame, make_frame(&world), __ATOMIC_RELAXED));
         lost_time = (double) wait_tick(&last_tick, target_nsecs) / BILLION;
     }
@@ -308,18 +233,15 @@ void step(world_t *world, world_time_t dt, float max_force) {
             // clamp force
             force = fminf(force, max_force);
 
-            // scale force by time
-            force *= dt;
-
             // apply force
             vec_t force_vec = {
                 .x = force * dx / dist,
                 .y = force * dy / dist
             };
-            world->particles[i].velocity.x += force_vec.x / world->particles[i].mass;
-            world->particles[i].velocity.y += force_vec.y / world->particles[i].mass;
-            world->particles[j].velocity.x -= force_vec.x / world->particles[j].mass;
-            world->particles[j].velocity.y -= force_vec.y / world->particles[j].mass;
+            world->particles[i].velocity.x += dt * force_vec.x / world->particles[i].mass;
+            world->particles[i].velocity.y += dt * force_vec.y / world->particles[i].mass;
+            world->particles[j].velocity.x -= dt * force_vec.x / world->particles[j].mass;
+            world->particles[j].velocity.y -= dt * force_vec.y / world->particles[j].mass;
         }
     }
 
