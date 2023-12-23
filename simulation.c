@@ -113,10 +113,14 @@ uint64_t wait_tick(struct timespec *last_tick, uint64_t target_nsecs) {
 // #define COLLISION
 #define CLUSTERING
 // #define GLOBAL_CLUSTERING
+
+// initialize the world; does not affect pause value (which thus should be initialized
+// separately before or after using this)
 void init_world(world_t *world) {
     const size_t NUM_PARTICLES = 1000;
+    bool paused = world->paused;
     *world = (world_t) {
-        .paused = false,
+        .paused = paused,
         .gravity = 180,
         .coulomb = 0,
         .collision = 0,
@@ -177,70 +181,88 @@ void process_input(input_t *input, world_t *world, world_time_t dt) {
     if (input == NULL) {
         return;
     }
-    switch (input->type) {
-        case INPUT_TYPE_FORCE_POINT: {
-            input_force_point_t *force_point = &input->force_point;
-            for (size_t i = 0; i < world->num_particles; i++) {
-                float dx = world->particles[i].center.x - force_point->point.x;
-                float dy = world->particles[i].center.y - force_point->point.y;
-                float dist_sq = dx * dx + dy * dy;
-                float dist = sqrtf(dist_sq);
-                float force = 0;
-                switch (force_point->force_type) {
-                    case FORCE_TYPE_GRAVITY:
-                        force = world->gravity * world->particles[i].mass * force_point->strength / dist_sq;
+    static bool force_point_active = false;
+    static input_force_point_t force_point;
+    while (input) {
+        switch (input->base.type) {
+            case INPUT_TYPE_FORCE_POINT: {
+                force_point = input->force_point;
+                force_point_active = true;
+                break;
+            }
+            case INPUT_TYPE_STOP_FORCE: {
+                force_point_active = false;
+                break;
+            }
+            case INPUT_TYPE_SPAWN: {
+                input_spawn_t *spawn = &input->spawn;
+                world->particles = realloc(world->particles, (world->num_particles + 1) * sizeof(particle_t));
+                particle_t particle;
+                particle.center.x = spawn->point.x;
+                particle.center.y = spawn->point.y;
+                particle.velocity.x = 0;
+                particle.velocity.y = 0;
+                particle.mass = spawn->mass;
+                particle.charge = spawn->charge;
+                particle.clustering = 1;
+                particle.radius = radius_of_mass(particle.mass);
+                world->particles[world->num_particles] = particle;
+                world->num_particles++;
+                break;
+            }
+            case INPUT_TYPE_COMMAND: {
+                input_command_t *command = &input->command;
+                switch (command->command_type) {
+                    case COMMAND_TYPE_PAUSE:
+                        fprintf(stderr, "pausing\n");
+                        world->paused = true;
                         break;
-                    case FORCE_TYPE_COULOMB:
-                        force = world->coulomb * world->particles[i].charge * force_point->strength / dist_sq;
+                    case COMMAND_TYPE_RESUME:
+                        fprintf(stderr, "resuming\n");
+                        world->paused = false;
+                        break;
+                    case COMMAND_TYPE_RESET:
+                        free(world->particles);
+                        init_world(world);
                         break;
                 }
-                force *= dt;
-                vec_t force_vec = {
-                    .x = force * dx / dist,
-                    .y = force * dy / dist
-                };
-                world->particles[i].velocity.x += force_vec.x / world->particles[i].mass;
-                world->particles[i].velocity.y += force_vec.y / world->particles[i].mass;
+                break;
             }
-            break;
+            default:
+                fprintf(stderr, "warning: unknown input type %d\n", input->base.type);
         }
-        case INPUT_TYPE_SPAWN: {
-            input_spawn_t *spawn = &input->spawn;
-            world->particles = realloc(world->particles, (world->num_particles + 1) * sizeof(particle_t));
-            particle_t particle;
-            particle.center.x = spawn->point.x;
-            particle.center.y = spawn->point.y;
-            particle.velocity.x = 0;
-            particle.velocity.y = 0;
-            particle.mass = spawn->mass;
-            particle.charge = spawn->charge;
-            particle.clustering = 1;
-            particle.radius = radius_of_mass(particle.mass);
-            world->particles[world->num_particles] = particle;
-            world->num_particles++;
-            break;
+        input_t *cur = input;
+        input = input->base.next;
+        free(cur);
+    }
+    for (size_t i = 0; force_point_active && i < world->num_particles; i++) {
+        float dx = world->particles[i].center.x - force_point.point.x;
+        float dy = world->particles[i].center.y - force_point.point.y;
+        float dist_sq = dx * dx + dy * dy;
+        float dist = sqrtf(dist_sq);
+        float force = 0;
+        switch (force_point.force_type) {
+            case FORCE_TYPE_GRAVITY:
+                force = world->gravity * world->particles[i].mass * force_point.strength / dist_sq;
+                break;
+            case FORCE_TYPE_COULOMB:
+                force = world->coulomb * world->particles[i].charge * force_point.strength / dist_sq;
+                break;
         }
-        case INPUT_TYPE_COMMAND: {
-            input_command_t *command = &input->command;
-            switch (command->command_type) {
-                case COMMAND_TYPE_PAUSE:
-                    world->paused = true;
-                    break;
-                case COMMAND_TYPE_RESUME:
-                    world->paused = false;
-                    break;
-                case COMMAND_TYPE_RESET:
-                    init_world(world);
-                    break;
-            }
-            break;
-        }
+        force *= dt;
+        vec_t force_vec = {
+            .x = force * dx / dist,
+            .y = force * dy / dist
+        };
+        world->particles[i].velocity.x += force_vec.x / world->particles[i].mass;
+        world->particles[i].velocity.y += force_vec.y / world->particles[i].mass;
     }
 }
 
 void *simulate(void *arg) {
     shared_data_t *shared = arg;
     world_t world;
+    world.paused = false;
     init_world(&world);
     const uint64_t TARGET_TPS = 120;
     const world_time_t TICK = 1.0 / TARGET_TPS;

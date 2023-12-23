@@ -3,6 +3,7 @@
 #include <pthread.h>
 #include <stdatomic.h>
 #include <math.h>
+#include <assert.h>
 
 #include <SDL.h>
 
@@ -32,10 +33,28 @@ typedef struct {
     double pt_to_pixel;
 } view_t;
 
+void add_input(shared_data_t *shared, input_t *input) {
+    input->base.next = NULL;
+    input_t *old_input = atomic_exchange_explicit(&shared->input, NULL, __ATOMIC_RELAXED);
+    // this is a FILO queue which is suboptimal, but it's good enough for now
+    input->base.next = old_input;
+    input_t *intermediate = atomic_exchange_explicit(&shared->input, input, __ATOMIC_RELAXED);
+    assert(intermediate == NULL && "only this thread should ever put non-NULL values here");
+}
+
+void add_command(shared_data_t *shared, int command_type) {
+    input_t *input = malloc(sizeof(input_t));
+    input->base.type = INPUT_TYPE_COMMAND;
+    input->command.command_type = command_type;
+    add_input(shared, (input_t *) input);
+}
+
 // returns true if should quit and false otherwise
-bool process_events(view_t *state) {
+bool process_events(view_t *state, shared_data_t *shared) {
     SDL_Event e;
-    static bool mouse_down = false;
+    static bool dragging = false;
+    static bool clicking = false;
+    static bool paused = false;
 
     // Handle all waiting events
     while (SDL_PollEvent(&e)) {
@@ -87,22 +106,32 @@ bool process_events(view_t *state) {
                 break;
             }
             case SDL_KEYUP: {
+                if (e.key.keysym.sym == SDLK_r) {
+                    fprintf(stderr, "\nreset\n");
+                    add_command(shared, COMMAND_TYPE_RESET);
+                } else if (e.key.keysym.sym == SDLK_SPACE) {
+                    fprintf(stderr, "\npause\n");
+                    add_command(shared, 
+                        paused ? COMMAND_TYPE_RESUME : COMMAND_TYPE_PAUSE
+                    );
+                    paused = !paused;
+                }
                 break;
             }
             case SDL_MOUSEBUTTONDOWN: {
-                if (e.button.button == SDL_BUTTON_LEFT) {
-                    mouse_down = true;
+                if (e.button.button == SDL_BUTTON_RIGHT) {
+                    dragging = true;
                 }
                 break;
             }
             case SDL_MOUSEBUTTONUP: {
-                if (e.button.button == SDL_BUTTON_LEFT) {
-                    mouse_down = false;
+                if (e.button.button == SDL_BUTTON_RIGHT) {
+                    dragging = false;
                 }
                 break;
             }
             case SDL_MOUSEMOTION: {
-                if (mouse_down) {
+                if (dragging) {
                     state->center.x -= e.motion.xrel / state->scale;
                     state->center.y -= e.motion.yrel / state->scale;
                 }
@@ -350,7 +379,7 @@ int main(int argc, char *argv[]) {
     // Event loop
     while (true) {
         // Handle events on queue
-        if (process_events(&state)) {
+        if (process_events(&state, &shared)) {
             break;
         }
         draw_frame(renderer, &state, &shared, mean_fps);
