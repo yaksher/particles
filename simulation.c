@@ -61,7 +61,9 @@ float radius_of_mass(float mass) {
 
 #define CHARGE_RANGE 5
 float particle_shade(particle_t *particle) {
-    return (particle->charge + CHARGE_RANGE) / (2 * CHARGE_RANGE);
+    // return (particle->charge + CHARGE_RANGE) / (2 * CHARGE_RANGE);
+    float speed = sqrtf(particle->velocity.x * particle->velocity.x + particle->velocity.y * particle->velocity.y);
+    return 1 - expf(-speed / 300);
 }
 // compute the frame from the world state
 frame_t *make_frame(world_t *world) {
@@ -110,7 +112,7 @@ uint64_t wait_tick(struct timespec *last_tick, uint64_t target_nsecs) {
 // FEATURES:
 #define GRAVITY
 // #define COULOMB
-// #define COLLISION
+#define COLLISION
 #define CLUSTERING
 // #define GLOBAL_CLUSTERING
 
@@ -121,11 +123,11 @@ void init_world(world_t *world) {
     bool paused = world->paused;
     *world = (world_t) {
         .paused = paused,
-        .gravity = 180,
-        .coulomb = 0,
-        .collision = 0,
-        .clustering = 6,
-        .global_clustering = 1. / NUM_PARTICLES,
+        .gravity = 160,
+        .coulomb = 50,
+        .collision = 1,
+        .clustering = 8,
+        .global_clustering = 0.5 / NUM_PARTICLES,
         .num_particles = NUM_PARTICLES,
         .particles = malloc(NUM_PARTICLES * sizeof(particle_t))
     };
@@ -138,7 +140,7 @@ void init_world(world_t *world) {
     world->particles[0].clustering = 0;
     world->particles[0].radius = 50;
     const float RING_RADIUS = 800;
-    const float VELOCITY = 4;
+    const float VELOCITY = 5;
     for (size_t i = 1; i < world->num_particles; i++) {
         particle_t particle;
         // Init position:
@@ -165,7 +167,7 @@ void init_world(world_t *world) {
         // Init mass, charge, clustering, and radius:
         // particle.mass = fmax(norm_rand() * 5 + 20, 0.01);
         // particle.radius = radius_of_mass(particle.mass);
-        particle.mass = 1;
+        particle.mass = 0.1;
         particle.radius = 3;
         // particle.charge = clamp(norm_rand() * 5, -CHARGE_RANGE, CHARGE_RANGE);
         // particle.charge = unif_rand() * 2 * CHARGE_RANGE - CHARGE_RANGE;
@@ -272,7 +274,7 @@ void *simulate(void *arg) {
         input_t *input = atomic_exchange_explicit(&shared->input, NULL, __ATOMIC_RELAXED);
         world_time_t dt = world.paused ? 0 : TICK + lost_time;
         process_input(input, &world, dt);
-        step(&world, dt, 5);
+        step(&world, dt, 2);
         free(atomic_exchange_explicit(&shared->frame, make_frame(&world), __ATOMIC_RELAXED));
         lost_time = (double) wait_tick(&last_tick, target_nsecs) / BILLION;
     }
@@ -320,7 +322,7 @@ void step(world_t *world, world_time_t dt, float max_force) {
             #ifdef CLUSTERING
             float target_cluster_dist = 4 + 4 * (pi->radius + pj->radius);
             float dist_off = target_cluster_dist - dist;
-            float cluster_func = dist_off / (target_cluster_dist * (1 + powf(dist_off/target_cluster_dist, 6)));
+            float cluster_func = dist_off / (target_cluster_dist * (1 + powf(dist_off/target_cluster_dist, 4)));
             force += world->clustering * pi->clustering * pj->clustering * cluster_func;
             #endif
 
@@ -347,7 +349,7 @@ void step(world_t *world, world_time_t dt, float max_force) {
     for (size_t i = 0; i < world->num_particles; i++) {
         // float vel_dot = world->particles[i].velocity.x * world->particles[i].center.x
         //               + world->particles[i].velocity.y * world->particles[i].center.y;
-        // float max_vel = max_step / dt;
+        // float max_vel = 5 / dt;
         // if (vel_dot > max_vel * max_vel) {
         //     float vel = sqrt(vel_dot);
         //     world->particles[i].velocity.x *= max_vel / vel;
