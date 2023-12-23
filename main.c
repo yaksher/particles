@@ -196,42 +196,22 @@ uint32_t round_up_to_mul_8(uint32_t v) {
     return (v + (8 - 1)) & ~(8 - 1);
 }
 
-uint32_t put_circle(SDL_Point center, uint16_t radius, SDL_Point *points) {
-    uint32_t draw_count = 0;
-
-    const int32_t diameter = radius * 2;
-
-    int32_t x = radius - 1;
-    int32_t y = 0;
-    int32_t tx = 1;
-    int32_t ty = 1;
-    int32_t error = tx - diameter;
-
-    while (x >= y) {
-        // Each of the following renders an octant of the circle
-        points[draw_count++] = (SDL_Point) { center.x + x, center.y - y };
-        points[draw_count++] = (SDL_Point) { center.x + x, center.y + y };
-        points[draw_count++] = (SDL_Point) { center.x - x, center.y - y };
-        points[draw_count++] = (SDL_Point) { center.x - x, center.y + y };
-        points[draw_count++] = (SDL_Point) { center.x + y, center.y - x };
-        points[draw_count++] = (SDL_Point) { center.x + y, center.y + x };
-        points[draw_count++] = (SDL_Point) { center.x - y, center.y - x };
-        points[draw_count++] = (SDL_Point) { center.x - y, center.y + x };
-
-        if (error <= 0) {
-            y--;
-            error += ty;
-            ty += 2;
-        }
-
-        if (error > 0) {
-            x--;
-            tx += 2;
-            error += tx - diameter;
+// draws a circle with radius r at center, using the point buffer to store the points
+// the point buffer must be at least 4r^2 + 1 points long
+// TODO: Optimize to draw a square and then fill in the edges
+void draw_circle(SDL_Renderer *renderer, SDL_Point center, pt_t radius, SDL_Point *point_buffer) {
+    // array of points, upper bounded by 4r^2 + 1
+    size_t num_points = 0;
+    for (pt_t w = 0; w < radius * 2 + 1; w++) {
+        for (pt_t h = 0; h < radius * 2 + 1; h++) {
+            int dx = radius - w; // horizontal offset
+            int dy = radius - h; // vertical offset
+            if ((dx*dx + dy*dy) <= (radius * radius)) {
+                point_buffer[num_points++] = (SDL_Point) { center.x + dx, center.y + dy };
+            }
         }
     }
-
-    return draw_count;
+    SDL_RenderDrawPoints(renderer, point_buffer, num_points);
 }
 
 void draw_frame(SDL_Renderer *renderer, view_t *state, shared_data_t *shared, double mean_fps) {
@@ -269,28 +249,25 @@ void draw_frame(SDL_Renderer *renderer, view_t *state, shared_data_t *shared, do
     //     );
     // }
     // SDL_Rect *rects = malloc(num_circles * sizeof(SDL_Rect));
+    size_t point_buf_size = 0;
+    SDL_Point *circle_point_buffer = NULL;
     for (size_t i = 0; i < num_circles; i++) {
         SDL_Point center = pos_world_to_screen(state, circles[i].center);
         pt_t radius = len_world_to_screen(state, circles[i].radius);
-        pt_t diameter = radius * 2;
-        if (diameter == 0) {
-            diameter = 1;
+        if (radius * radius * 4 + 1 > point_buf_size) {
+            point_buf_size = radius * radius * 4 + 1;
+            free(circle_point_buffer);
+            circle_point_buffer = malloc(point_buf_size * sizeof(SDL_Point));
         }
-        SDL_Rect rect = {
-            .x = center.x - radius,
-            .y = center.y - radius,
-            .w = diameter,
-            .h = diameter
-        };
         SDL_SetRenderDrawColor(renderer, 
             0xFF * circles[i].shade,
             0x80, 
             0xFF * (1 - circles[i].shade),
             0xFF
         );
-        SDL_RenderFillRect(renderer, &rect);
+        draw_circle(renderer, center, radius, circle_point_buffer);
     }
-    // free(rects);
+    free(circle_point_buffer);
 
     SDL_SetRenderDrawColor(renderer, 0xFF, 0xFF, 0xFF, 0xFF);
     int32_t off = 20 * state->pt_to_pixel;
