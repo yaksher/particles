@@ -268,6 +268,10 @@ void draw_frame(SDL_Renderer *renderer, view_t *state, shared_data_t *shared, do
     for (size_t i = 0; i < num_circles; i++) {
         SDL_Point center = pos_world_to_screen(state, circles[i].center);
         pt_t radius = len_world_to_screen(state, circles[i].radius);
+        if (center.x + radius < 0 || center.x - radius > state->window_width * state->pt_to_pixel
+            || center.y + radius < 0 || center.y - radius > state->window_height * state->pt_to_pixel) {
+            continue;
+        }
         size_t min_points = radius * radius * 3 + 4;
         if (point_buf_size < min_points) {
             point_buf_size = min_points;
