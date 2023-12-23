@@ -18,7 +18,7 @@
 #define DEFAULT_SCREEN_WIDTH 1600
 #define DEFAULT_SCREEN_HEIGHT 1200
 
-typedef uint32_t pt_t;
+typedef int32_t pt_t;
 
 typedef struct {
     // number of pixels per world unit
@@ -32,6 +32,25 @@ typedef struct {
     pt_t window_height;
     double pt_to_pixel;
 } view_t;
+
+float len_screen_to_world(view_t *state, pt_t len) {
+    return len / state->scale;
+}
+
+int32_t len_world_to_screen(view_t *state, float dist) {
+    return dist * state->scale * state->pt_to_pixel;
+}
+
+SDL_Point pos_world_to_screen(view_t *state, point_t pos) {
+    return (SDL_Point) {
+        .x = len_world_to_screen(state, 
+            pos.x - state->center.x + len_screen_to_world(state, state->window_width / 2)
+        ),
+        .y = len_world_to_screen(state, 
+            pos.y - state->center.y + len_screen_to_world(state, state->window_height / 2)
+        )
+    };
+}
 
 void add_input(shared_data_t *shared, input_t *input) {
     input->base.next = NULL;
@@ -53,7 +72,6 @@ void add_command(shared_data_t *shared, int command_type) {
 bool process_events(view_t *state, shared_data_t *shared) {
     SDL_Event e;
     static bool dragging = false;
-    static bool clicking = false;
     static bool paused = false;
 
     // Handle all waiting events
@@ -119,6 +137,19 @@ bool process_events(view_t *state, shared_data_t *shared) {
             case SDL_MOUSEBUTTONDOWN: {
                 if (e.button.button == SDL_BUTTON_RIGHT) {
                     dragging = true;
+                }
+                if (e.button.button == SDL_BUTTON_LEFT) {
+                    SDL_Point pos = (SDL_Point) { e.button.x, e.button.y };
+                    point_t world_pos = (point_t) {
+                        .x = state->center.x + len_screen_to_world(state, pos.x - state->window_width / 2),
+                        .y = state->center.y + len_screen_to_world(state, pos.y - state->window_height / 2)
+                    };
+                    input_t *input = malloc(sizeof(input_t));
+                    input->base.type = INPUT_TYPE_SPAWN;
+                    input->spawn.point = world_pos;
+                    input->spawn.mass = 100;
+                    input->spawn.charge = rand() / (float) RAND_MAX * 10 - 5;
+                    add_input(shared, input);
                 }
                 break;
             }
@@ -201,25 +232,6 @@ uint32_t put_circle(SDL_Point center, uint16_t radius, SDL_Point *points) {
     }
 
     return draw_count;
-}
-
-float len_screen_to_world(view_t *state, pt_t len) {
-    return len / state->scale;
-}
-
-uint32_t len_world_to_screen(view_t *state, float dist) {
-    return dist * state->scale * state->pt_to_pixel;
-}
-
-SDL_Point pos_world_to_screen(view_t *state, point_t pos) {
-    return (SDL_Point) {
-        .x = len_world_to_screen(state, 
-            pos.x - state->center.x + len_screen_to_world(state, state->window_width / 2)
-        ),
-        .y = len_world_to_screen(state, 
-            pos.y - state->center.y + len_screen_to_world(state, state->window_height / 2)
-        )
-    };
 }
 
 void draw_frame(SDL_Renderer *renderer, view_t *state, shared_data_t *shared, double mean_fps) {
