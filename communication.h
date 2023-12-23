@@ -30,31 +30,37 @@ typedef enum {
     INPUT_TYPE_COMMAND,
 } input_type_t;
 
+typedef struct {
+    input_type_t type; // INPUT_TYPE_FORCE_POINT
+    point_t point;
+    enum {
+        FORCE_TYPE_GRAVITY,
+        FORCE_TYPE_COULOMB,
+    } force_type;
+    float strength;
+} input_force_point_t;
+
+typedef struct {
+    input_type_t type; // INPUT_TYPE_SPAWN
+    point_t point;
+    float mass;
+    float charge;
+} input_spawn_t;
+
+typedef struct {
+    input_type_t type; // INPUT_TYPE_COMMAND
+    enum {
+        COMMAND_TYPE_PAUSE,
+        COMMAND_TYPE_RESUME,
+        COMMAND_TYPE_RESET,
+    } command_type;
+} input_command_t;
+
 typedef union {
     input_type_t type;
-    struct {
-        input_type_t type;
-        point_t point;
-        enum {
-            FORCE_TYPE_GRAVITY,
-            FORCE_TYPE_COULOMB,
-        } force_type;
-    } force_point;
-    struct {
-        input_type_t type;
-        point_t point;
-        float mass;
-        float charge;
-    } spawn;
-    struct {
-        input_type_t type;
-        enum {
-            COMMAND_TYPE_PAUSE,
-            COMMAND_TYPE_RESUME,
-            COMMAND_TYPE_RESET,
-            COMMAND_TYPE_QUIT,
-        } command_type;
-    } command;
+    input_force_point_t force_point;
+    input_spawn_t spawn;
+    input_command_t command;
 } input_t;
 
 typedef struct {
