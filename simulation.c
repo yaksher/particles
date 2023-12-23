@@ -214,11 +214,9 @@ void process_input(input_t *input, world_t *world, world_time_t dt) {
                 input_command_t *command = &input->command;
                 switch (command->command_type) {
                     case COMMAND_TYPE_PAUSE:
-                        fprintf(stderr, "pausing\n");
                         world->paused = true;
                         break;
                     case COMMAND_TYPE_RESUME:
-                        fprintf(stderr, "resuming\n");
                         world->paused = false;
                         break;
                     case COMMAND_TYPE_RESET:

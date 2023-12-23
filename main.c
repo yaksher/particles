@@ -107,10 +107,8 @@ bool process_events(view_t *state, shared_data_t *shared) {
             }
             case SDL_KEYUP: {
                 if (e.key.keysym.sym == SDLK_r) {
-                    fprintf(stderr, "\nreset\n");
                     add_command(shared, COMMAND_TYPE_RESET);
                 } else if (e.key.keysym.sym == SDLK_SPACE) {
-                    fprintf(stderr, "\npause\n");
                     add_command(shared, 
                         paused ? COMMAND_TYPE_RESUME : COMMAND_TYPE_PAUSE
                     );
