@@ -1,6 +1,6 @@
 CC=clang
 SDL_INCLUDE_FLAGS=$(shell sdl2-config --cflags)
-CFLAGS=-Wall -Wextra -Weverything -Ofast $(SDL_INCLUDE_FLAGS)
+CFLAGS=-Wall -Wextra -Ofast $(SDL_INCLUDE_FLAGS)
 LDLIBS=-lsdl2 -lpthread
 
 default: build
