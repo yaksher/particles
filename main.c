@@ -272,11 +272,15 @@ void draw_frame(SDL_Renderer *renderer, view_t *state, shared_data_t *shared, do
     for (size_t i = 0; i < num_circles; i++) {
         SDL_Point center = pos_world_to_screen(state, circles[i].center);
         pt_t radius = len_world_to_screen(state, circles[i].radius);
+        pt_t diameter = radius * 2;
+        if (diameter == 0) {
+            diameter = 1;
+        }
         SDL_Rect rect = {
             .x = center.x - radius,
             .y = center.y - radius,
-            .w = radius * 2,
-            .h = radius * 2
+            .w = diameter,
+            .h = diameter
         };
         SDL_SetRenderDrawColor(renderer, 
             0xFF * circles[i].shade,
