@@ -21,6 +21,7 @@ typedef struct {
     float charge;
     float clustering;
     float radius;
+    bool fixed;
 } particle_t;
 
 typedef struct {
@@ -157,6 +158,7 @@ void init_world(world_t *world) {
     world->particles[0].charge = 0;
     world->particles[0].clustering = 0;
     world->particles[0].radius = 50;
+    world->particles[0].fixed = true;
     const float RING_RADIUS = 800;
     const float VELOCITY = 5;
     for (size_t i = 1; i < world->num_particles; i++) {
@@ -191,6 +193,7 @@ void init_world(world_t *world) {
         // particle.charge = unif_rand() * 2 * CHARGE_RANGE - CHARGE_RANGE;
         particle.charge = unif_rand() < 0.5 ? CHARGE_RANGE : -CHARGE_RANGE;
         particle.clustering = 1;
+        particle.fixed = false;
         world->particles[i] = particle;
     }
 }
@@ -425,8 +428,8 @@ void *step_helper(void *arg) {
 
         // apply velocity
         for (size_t i = first_i; i < last_i; i++) {
-            world->particles[i].center.x += world->particles[i].velocity.x * dt;
-            world->particles[i].center.y += world->particles[i].velocity.y * dt;
+            world->particles[i].center.x += world->particles[i].velocity.x * dt * !world->particles[i].fixed;
+            world->particles[i].center.y += world->particles[i].velocity.y * dt * !world->particles[i].fixed;
         }
 
         atomic_fetch_add(&data->num_done, 1);
