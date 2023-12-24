@@ -75,7 +75,7 @@ double norm_rand() {
 }
 
 float radius_of_mass(float mass) {
-    return sqrt(mass) / 2;
+    return sqrt(mass);
 }
 
 #define CHARGE_RANGE 5
@@ -142,10 +142,10 @@ void init_world(world_t *world) {
     bool paused = world->paused;
     *world = (world_t) {
         .paused = paused,
-        .gravity = 160,
+        .gravity = 1000,
         .coulomb = 50,
-        .collision = 1,
-        .clustering = 6,
+        .collision = 10,
+        .clustering = 10,
         .global_clustering = 0.5 / NUM_PARTICLES,
         .num_particles = NUM_PARTICLES,
         .particles = malloc(NUM_PARTICLES * sizeof(particle_t))
@@ -159,8 +159,8 @@ void init_world(world_t *world) {
     world->particles[0].clustering = 0;
     world->particles[0].radius = 50;
     world->particles[0].fixed = true;
-    const float RING_RADIUS = 800;
-    const float VELOCITY = 5;
+    const float RING_RADIUS = 2000;
+    float velocity = 0.3 * sqrtf(world->gravity * world->particles[0].mass);
     for (size_t i = 1; i < world->num_particles; i++) {
         particle_t particle;
         // Init position:
@@ -175,24 +175,32 @@ void init_world(world_t *world) {
         inv_rad = fmaxf(inv_rad, 0.001);
         float rad = RING_RADIUS / inv_rad;
         // add some noise
-        rad *= norm_rand() * 0.05 + 1;
+        if (i < NUM_PARTICLES * 0.3) {
+            rad *= 0.2;
+        }
+        rad *= norm_rand() * 0.03 + 1;
         // scale the direction vector to the desired radius
         particle.center.x = dir.x * rad;
         particle.center.y = dir.y * rad;
 
         // Init velocity (approx. tangential to the ring):
-        particle.velocity.x = particle.center.y / sqrtf(rad) * VELOCITY + norm_rand() * 0.1;
-        particle.velocity.y = -particle.center.x / sqrtf(rad) * VELOCITY + norm_rand() * 0.1;
+        if (i < NUM_PARTICLES * 0.3) {
+            velocity *= 0.01;
+        }
+        particle.velocity.x = particle.center.y / sqrtf(rad) / rad * velocity + norm_rand() * 0.;
+        particle.velocity.y = -particle.center.x / sqrtf(rad) / rad * velocity + norm_rand() * 0.;
+        if (i < NUM_PARTICLES * 0.3) {
+            velocity *= 100;
+        }
 
         // Init mass, charge, clustering, and radius:
-        // particle.mass = fmax(norm_rand() * 5 + 20, 0.01);
         // particle.radius = radius_of_mass(particle.mass);
-        particle.mass = 10;
-        particle.radius = 3;
+        particle.mass = fmax(10 + norm_rand() * 5, 0.01);
+        particle.radius = radius_of_mass(particle.mass);
         // particle.charge = clamp(norm_rand() * 5, -CHARGE_RANGE, CHARGE_RANGE);
         // particle.charge = unif_rand() * 2 * CHARGE_RANGE - CHARGE_RANGE;
         particle.charge = unif_rand() < 0.5 ? CHARGE_RANGE : -CHARGE_RANGE;
-        particle.clustering = 1;
+        particle.clustering = 2;
         particle.fixed = false;
         world->particles[i] = particle;
     }
@@ -388,13 +396,13 @@ void *step_helper(void *arg) {
                 #ifdef COLLISION
                 float surface_dist = fmaxf(3 + dist - pi->radius - pj->radius, 0.1);
                 if (surface_dist < 3) {
-                    force += world->collision / powf(surface_dist, 3);
+                    force += world->collision * pi->mass / powf(surface_dist, 3);
                 }
                 #endif
 
                 // clustering
                 #ifdef CLUSTERING
-                float target_cluster_dist = 4 + 4 * (pi->radius + pj->radius);
+                float target_cluster_dist = 5 + 8 * (pi->radius + pj->radius);
                 float dist_off = target_cluster_dist - dist;
                 float cluster_func = dist_off / (target_cluster_dist * (1 + powf(dist_off/target_cluster_dist, 4)));
                 force += world->clustering * pi->clustering * pj->clustering * cluster_func;
@@ -412,8 +420,8 @@ void *step_helper(void *arg) {
                     .x = force * dx / dist,
                     .y = force * dy / dist
                 };
-                world->particles[i].velocity.x += force_vec.x / world->particles[i].mass;
-                world->particles[i].velocity.y += force_vec.y / world->particles[i].mass;
+                pi->velocity.x += force_vec.x / pi->mass;
+                pi->velocity.y += force_vec.y / pi->mass;
             }
         }
 
