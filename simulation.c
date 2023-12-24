@@ -2,12 +2,15 @@
 #include <stdio.h>
 #include <math.h>
 #include <stdatomic.h>
+#include <pthread.h>
 #include <stdbool.h>
 #include <time.h>
 
 #include "simulation.h"
 
 #define BILLION 1000000000L
+
+#define NUM_WORKERS 32
 
 typedef double world_time_t;
 
@@ -30,6 +33,21 @@ typedef struct {
     double clustering;
     double global_clustering;
 } world_t;
+
+typedef struct {
+    world_t *world;
+    world_time_t dt;
+    float max_force;
+    _Atomic size_t num_done;
+    pthread_mutex_t mutex;
+    pthread_cond_t main;
+    pthread_cond_t workers;
+} step_helper_data_t;
+
+typedef struct {
+    step_helper_data_t *data;
+    size_t worker_id;
+} step_helper_arg_t;
 
 double clamp(double x, double min, double max) {
     if (x < min) {
@@ -177,7 +195,8 @@ void init_world(world_t *world) {
     }
 }
 
-void step(world_t *, world_time_t, float);
+void step(step_helper_data_t *data, world_time_t dt, float max_force);
+void *step_helper(void *);
 
 void process_input(input_t *input, world_t *world, world_time_t dt) {
     if (input == NULL) {
@@ -270,12 +289,32 @@ void *simulate(void *arg) {
     struct timespec last_tick;
     clock_gettime(CLOCK_MONOTONIC, &last_tick);
     double lost_time = 0;
+    pthread_t workers[NUM_WORKERS];
+    step_helper_data_t data = {
+        .world = &world,
+        .dt = TICK,
+        .max_force = 2,
+        .num_done = NUM_WORKERS * 2,
+        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .main = PTHREAD_COND_INITIALIZER,
+        .workers = PTHREAD_COND_INITIALIZER
+    };
+    for (size_t i = 0; i < NUM_WORKERS; i++) {
+        step_helper_arg_t *arg = malloc(sizeof(step_helper_arg_t));
+        arg->data = &data;
+        arg->worker_id = i;
+        pthread_create(&workers[i], NULL, step_helper, arg);
+    }
     while (true) {
         input_t *input = atomic_exchange_explicit(&shared->input, NULL, __ATOMIC_RELAXED);
-        world_time_t dt = world.paused ? 0 : TICK + lost_time;
-        process_input(input, &world, dt);
-        step(&world, dt, 2);
-        free(atomic_exchange_explicit(&shared->frame, make_frame(&world), __ATOMIC_RELAXED));
+        if (world.paused) {
+            process_input(input, &world, 0);
+        } else {
+            world_time_t dt = TICK + lost_time;
+            process_input(input, &world, dt);
+            step(&data, dt, 2);
+            free(atomic_exchange_explicit(&shared->frame, make_frame(&world), __ATOMIC_RELAXED));
+        }
         lost_time = (double) wait_tick(&last_tick, target_nsecs) / BILLION;
     }
 
@@ -283,79 +322,127 @@ void *simulate(void *arg) {
 }
 
 
-void step(world_t *world, world_time_t dt, float max_force) {
-    for (size_t i = 0; i < world->num_particles; i++) {
-        for (size_t j = i + 1; j < world->num_particles; j++) {
-            particle_t *pi = &world->particles[i], *pj = &world->particles[j];
-            float dx = pi->center.x - pj->center.x;
-            float dy = pi->center.y - pj->center.y;
-            float dist_sq = dx * dx + dy * dy;
-            dist_sq = fmaxf(dist_sq, 0.1);
-            float dist = sqrtf(dist_sq);
+void step(step_helper_data_t *data, world_time_t dt, float max_force) {
 
-            // total repulsion between i and j
-            float force = 0;
+    data->dt = dt;
+    data->max_force = max_force;
+    atomic_store(&data->num_done, 0);
+    pthread_cond_broadcast(&data->workers);
 
-            #ifdef GLOBAL_CLUSTERING
-            force -= world->global_clustering * dist * sqrt(pi->mass * pj->mass);
-            #endif
+    // wait for workers to finish
+    pthread_mutex_lock(&data->mutex);
+    while (atomic_load(&data->num_done) != 2 * NUM_WORKERS) {
+        pthread_cond_wait(&data->main, &data->mutex);
+    }
+    pthread_mutex_unlock(&data->mutex);
+}
 
-            // gravity
-            #ifdef GRAVITY
-            force -= world->gravity * pi->mass * pj->mass / dist_sq;
-            #endif
+void *step_helper(void *arg) {
+    step_helper_arg_t *helper_arg = arg;
+    step_helper_data_t *data = helper_arg->data;
+    world_t *world = data->world;
+    size_t worker_id = helper_arg->worker_id;
+    free(helper_arg);
 
-            // charge
-            #ifdef COULOMB
-            force += world->coulomb * pi->charge * pj->charge / dist_sq;
-            #endif
-
-            // collision
-            #ifdef COLLISION
-            float surface_dist = fmaxf(3 + dist - pi->radius - pj->radius, 0.1);
-            if (surface_dist < 3) {
-                force += world->collision / powf(surface_dist, 3);
-            }
-            #endif
-
-            // clustering
-            #ifdef CLUSTERING
-            float target_cluster_dist = 4 + 4 * (pi->radius + pj->radius);
-            float dist_off = target_cluster_dist - dist;
-            float cluster_func = dist_off / (target_cluster_dist * (1 + powf(dist_off/target_cluster_dist, 4)));
-            force += world->clustering * pi->clustering * pj->clustering * cluster_func;
-            #endif
-
-
-            // clamp force
-            force = fminf(force, max_force);
-
-            // scale force by time
-            force *= dt;
-
-            // apply force
-            vec_t force_vec = {
-                .x = force * dx / dist,
-                .y = force * dy / dist
-            };
-            world->particles[i].velocity.x += force_vec.x / world->particles[i].mass;
-            world->particles[i].velocity.y += force_vec.y / world->particles[i].mass;
-            world->particles[j].velocity.x -= force_vec.x / world->particles[j].mass;
-            world->particles[j].velocity.y -= force_vec.y / world->particles[j].mass;
+    while (true) {
+        pthread_mutex_lock(&data->mutex);
+        while (atomic_load(&data->num_done) >= NUM_WORKERS) {
+            // wait for other workers to finish
+            pthread_cond_wait(&data->workers, &data->mutex);
         }
+        pthread_mutex_unlock(&data->mutex);
+        world_time_t dt = data->dt;
+        float max_force = data->max_force;
+        size_t first_i = world->num_particles * worker_id / NUM_WORKERS;
+        size_t last_i = world->num_particles * (worker_id + 1) / NUM_WORKERS;
+        for (size_t i = first_i; i < last_i; i++) {
+            for (size_t j = 0; j < world->num_particles; j++) {
+                particle_t *pi = &world->particles[i], *pj = &world->particles[j];
+                float dx = pi->center.x - pj->center.x;
+                float dy = pi->center.y - pj->center.y;
+                float dist_sq = dx * dx + dy * dy;
+                dist_sq = fmaxf(dist_sq, 0.1);
+                float dist = sqrtf(dist_sq);
+
+                // total repulsion between i and j
+                float force = 0;
+
+                #ifdef GLOBAL_CLUSTERING
+                force -= world->global_clustering * dist * sqrt(pi->mass * pj->mass);
+                #endif
+
+                // gravity
+                #ifdef GRAVITY
+                force -= world->gravity * pi->mass * pj->mass / dist_sq;
+                #endif
+
+                // charge
+                #ifdef COULOMB
+                force += world->coulomb * pi->charge * pj->charge / dist_sq;
+                #endif
+
+                // collision
+                #ifdef COLLISION
+                float surface_dist = fmaxf(3 + dist - pi->radius - pj->radius, 0.1);
+                if (surface_dist < 3) {
+                    force += world->collision / powf(surface_dist, 3);
+                }
+                #endif
+
+                // clustering
+                #ifdef CLUSTERING
+                float target_cluster_dist = 4 + 4 * (pi->radius + pj->radius);
+                float dist_off = target_cluster_dist - dist;
+                float cluster_func = dist_off / (target_cluster_dist * (1 + powf(dist_off/target_cluster_dist, 4)));
+                force += world->clustering * pi->clustering * pj->clustering * cluster_func;
+                #endif
+
+
+                // clamp force
+                force = fminf(force, max_force);
+
+                // scale force by time
+                force *= dt;
+
+                // apply force
+                vec_t force_vec = {
+                    .x = force * dx / dist,
+                    .y = force * dy / dist
+                };
+                world->particles[i].velocity.x += force_vec.x / world->particles[i].mass;
+                world->particles[i].velocity.y += force_vec.y / world->particles[i].mass;
+            }
+        }
+
+        atomic_fetch_add(&data->num_done, 1);
+        pthread_cond_broadcast(&data->workers);
+        pthread_mutex_lock(&data->mutex);
+        while (atomic_load(&data->num_done) < NUM_WORKERS) {
+            pthread_cond_wait(&data->workers, &data->mutex);
+            // wait for other workers to finish
+        }
+        pthread_mutex_unlock(&data->mutex);
+
+        // apply velocity
+        for (size_t i = first_i; i < last_i; i++) {
+            world->particles[i].center.x += world->particles[i].velocity.x * dt;
+            world->particles[i].center.y += world->particles[i].velocity.y * dt;
+        }
+
+        atomic_fetch_add(&data->num_done, 1);
+        pthread_cond_broadcast(&data->workers);
+        pthread_mutex_lock(&data->mutex);
+        while (true) {
+            size_t num_done = atomic_load(&data->num_done);
+            if (num_done < NUM_WORKERS || num_done == 2 * NUM_WORKERS) {
+                break;
+            }
+            pthread_cond_wait(&data->workers, &data->mutex);
+            // wait for other workers to finish
+        }
+        pthread_mutex_unlock(&data->mutex);
+        pthread_cond_signal(&data->main);
     }
 
-    // apply velocity
-    for (size_t i = 0; i < world->num_particles; i++) {
-        // float vel_dot = world->particles[i].velocity.x * world->particles[i].center.x
-        //               + world->particles[i].velocity.y * world->particles[i].center.y;
-        // float max_vel = 5 / dt;
-        // if (vel_dot > max_vel * max_vel) {
-        //     float vel = sqrt(vel_dot);
-        //     world->particles[i].velocity.x *= max_vel / vel;
-        //     world->particles[i].velocity.y *= max_vel / vel;
-        // }
-        world->particles[i].center.x += world->particles[i].velocity.x * dt;
-        world->particles[i].center.y += world->particles[i].velocity.y * dt;
-    }
+    return NULL;
 }
