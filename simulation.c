@@ -131,20 +131,20 @@ uint64_t wait_tick(struct timespec *last_tick, uint64_t target_nsecs) {
 #define GRAVITY
 // #define COULOMB
 #define COLLISION
-#define CLUSTERING
+// #define CLUSTERING
 // #define GLOBAL_CLUSTERING
 
 // initialize the world; does not affect pause value (which thus should be initialized
 // separately before or after using this)
 void init_world(world_t *world) {
-    const size_t NUM_PARTICLES = 1000;
+    const size_t NUM_PARTICLES = 5000;
     bool paused = world->paused;
     *world = (world_t) {
         .paused = paused,
         .gravity = 160,
         .coulomb = 50,
         .collision = 1,
-        .clustering = 8,
+        .clustering = 6,
         .global_clustering = 0.5 / NUM_PARTICLES,
         .num_particles = NUM_PARTICLES,
         .particles = malloc(NUM_PARTICLES * sizeof(particle_t))
@@ -173,7 +173,7 @@ void init_world(world_t *world) {
         inv_rad = fmaxf(inv_rad, 0.001);
         float rad = RING_RADIUS / inv_rad;
         // add some noise
-        rad *= norm_rand() * 0.01 + 1;
+        rad *= norm_rand() * 0.05 + 1;
         // scale the direction vector to the desired radius
         particle.center.x = dir.x * rad;
         particle.center.y = dir.y * rad;
@@ -185,7 +185,7 @@ void init_world(world_t *world) {
         // Init mass, charge, clustering, and radius:
         // particle.mass = fmax(norm_rand() * 5 + 20, 0.01);
         // particle.radius = radius_of_mass(particle.mass);
-        particle.mass = 0.1;
+        particle.mass = 10;
         particle.radius = 3;
         // particle.charge = clamp(norm_rand() * 5, -CHARGE_RANGE, CHARGE_RANGE);
         // particle.charge = unif_rand() * 2 * CHARGE_RANGE - CHARGE_RANGE;
@@ -313,8 +313,8 @@ void *simulate(void *arg) {
             world_time_t dt = TICK + lost_time;
             process_input(input, &world, dt);
             step(&data, dt, 2);
-            free(atomic_exchange_explicit(&shared->frame, make_frame(&world), __ATOMIC_RELAXED));
         }
+        free(atomic_exchange_explicit(&shared->frame, make_frame(&world), __ATOMIC_RELAXED));
         lost_time = (double) wait_tick(&last_tick, target_nsecs) / BILLION;
     }
 
