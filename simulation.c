@@ -352,7 +352,14 @@ void *simulate(void *arg) {
         pthread_create(&workers[i], NULL, step_helper, arg);
     }
     while (true) {
+        struct timespec start;
+        clock_gettime(CLOCK_MONOTONIC, &start);
         input_t *input = atomic_exchange_explicit(&shared->input, NULL, __ATOMIC_RELAXED);
+        struct timespec end;
+        clock_gettime(CLOCK_MONOTONIC, &end);
+        uint64_t elapsed_nsecs = (end.tv_sec - start.tv_sec) * BILLION 
+                                + (end.tv_nsec - start.tv_nsec);
+        fprintf(stderr, "Input processing time %0.5fs.", elapsed_nsecs / (double) BILLION);
         frame_t *next_frame;
         if (world.paused) {
             process_input(input, &world, 0);
