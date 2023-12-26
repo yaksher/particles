@@ -235,7 +235,7 @@ static void init_world(world_t *world) {
     }
 }
 
-static void step(step_helper_data_t *data, world_time_t dt, float max_force);
+static frame_t *step(step_helper_data_t *data, world_time_t dt, float max_force);
 static void *step_helper(void *);
 
 static void process_input(input_t *input, world_t *world, world_time_t dt) {
@@ -285,6 +285,7 @@ static void process_input(input_t *input, world_t *world, world_time_t dt) {
                         break;
                     case COMMAND_TYPE_RESET:
                         free(world->particles);
+                        free(world->phases);
                         init_world(world);
                         break;
                 }
@@ -373,7 +374,10 @@ void *simulate(void *arg) {
 }
 
 
-static void step(step_helper_data_t *data, world_time_t dt, float max_force) {
+static frame_t *step(step_helper_data_t *data, world_time_t dt, float max_force) {
+    pthread_mutex_lock(&data->main_mutex);
+
+    // initialize next phase
     data->dt = dt;
     data->max_force = max_force;
     data->next = malloc(data->world->num_particles * sizeof(phase_pair_t));
@@ -381,13 +385,10 @@ static void step(step_helper_data_t *data, world_time_t dt, float max_force) {
     data->next_frame->num_circles = data->world->num_particles;
 
     // wake up workers    
-    pthread_mutex_lock(&data->workers_mutex);
     data->should_start_mask = ((uint64_t) 1 << NUM_WORKERS) - 1;
     pthread_cond_broadcast(&data->workers);
-    pthread_mutex_unlock(&data->workers_mutex);
 
     // wait for workers to finish
-    pthread_mutex_lock(&data->main_mutex);
     while (data->num_done < NUM_WORKERS) {
         pthread_cond_wait(&data->main, &data->main_mutex);
     }
@@ -397,6 +398,7 @@ static void step(step_helper_data_t *data, world_time_t dt, float max_force) {
     // swap to next phase
     free(data->world->phases);
     data->world->phases = data->next;
+    return data->next_frame;
 }
 
 static void *step_helper(void *arg) {
@@ -406,13 +408,13 @@ static void *step_helper(void *arg) {
     size_t worker_id = helper_arg->worker_id;
     free(helper_arg);
 
+    pthread_mutex_lock(&data->main_mutex);
     while (true) {
-        pthread_mutex_lock(&data->workers_mutex);
         while ((data->should_start_mask & ((uint64_t) 1 << worker_id)) == 0) {
-            pthread_cond_wait(&data->workers, &data->workers_mutex);
+            pthread_cond_wait(&data->workers, &data->main_mutex);
         }
         data->should_start_mask &= ~((uint64_t) 1 << worker_id);
-        pthread_mutex_unlock(&data->workers_mutex);
+        pthread_mutex_unlock(&data->main_mutex);
 
         world_time_t dt = data->dt;
         float max_force = data->max_force;
@@ -492,13 +494,13 @@ static void *step_helper(void *arg) {
             pi->pos.y += pi->vel.y * dt * !world->particles[i].fixed;
         }
 
-        init_frame(data->next_frame, world, first_i, last_i);
+        // init_frame(data->next_frame, world, first_i, last_i);
 
         pthread_mutex_lock(&data->main_mutex);
         data->num_done++;
         pthread_cond_signal(&data->main);
-        pthread_mutex_unlock(&data->main_mutex);
     }
+    pthread_mutex_unlock(&data->main_mutex);
 
     return NULL;
 }
