@@ -50,7 +50,7 @@ typedef struct {
     size_t worker_id;
 } step_helper_arg_t;
 
-double clamp(double x, double min, double max) {
+static double clamp(double x, double min, double max) {
     if (x < min) {
         return min;
     } else if (x > max) {
@@ -60,11 +60,11 @@ double clamp(double x, double min, double max) {
     }
 }
 
-double unif_rand() {
+static double unif_rand() {
     return rand() / (double) RAND_MAX;
 }
 
-double norm_rand() {
+static double norm_rand() {
     const double EPSILON = 1e-12;
     double u;
     do {
@@ -74,18 +74,18 @@ double norm_rand() {
     return sqrt(-2 * log(u)) * cos(2 * M_PI * v);
 }
 
-float radius_of_mass(float mass) {
+static float radius_of_mass(float mass) {
     return sqrt(mass);
 }
 
 #define CHARGE_RANGE 5
-float particle_shade(particle_t *particle) {
+static float particle_shade(particle_t *particle) {
     // return (particle->charge + CHARGE_RANGE) / (2 * CHARGE_RANGE);
     dist_t speed = sqrtf(particle->velocity.x * particle->velocity.x + particle->velocity.y * particle->velocity.y);
     return 1 - expf(-speed / 300);
 }
 // compute the frame from the world state
-frame_t *make_frame(world_t *world) {
+static frame_t *make_frame(world_t *world) {
     frame_t *frame = malloc(sizeof(frame_t) + world->num_particles * sizeof(circle_t));
     frame->num_circles = world->num_particles;
     circle_t *circles = frame->circles;
@@ -101,7 +101,7 @@ frame_t *make_frame(world_t *world) {
 // wait until the next tick
 // if the last tick took too long, return the time that needs to be
 // made up
-uint64_t wait_tick(struct timespec *last_tick, uint64_t target_nsecs) {
+static uint64_t wait_tick(struct timespec *last_tick, uint64_t target_nsecs) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     uint64_t elapsed_nsecs = (now.tv_sec - last_tick->tv_sec) * BILLION 
@@ -137,7 +137,7 @@ uint64_t wait_tick(struct timespec *last_tick, uint64_t target_nsecs) {
 
 // initialize the world; does not affect pause value (which thus should be initialized
 // separately before or after using this)
-void init_world(world_t *world) {
+static void init_world(world_t *world) {
     const size_t NUM_PARTICLES = 5000;
     bool paused = world->paused;
     *world = (world_t) {
@@ -206,10 +206,10 @@ void init_world(world_t *world) {
     }
 }
 
-void step(step_helper_data_t *data, world_time_t dt, float max_force);
-void *step_helper(void *);
+static void step(step_helper_data_t *data, world_time_t dt, float max_force);
+static void *step_helper(void *);
 
-void process_input(input_t *input, world_t *world, world_time_t dt) {
+static void process_input(input_t *input, world_t *world, world_time_t dt) {
     if (input == NULL) {
         return;
     }
@@ -333,7 +333,7 @@ void *simulate(void *arg) {
 }
 
 
-void step(step_helper_data_t *data, world_time_t dt, float max_force) {
+static void step(step_helper_data_t *data, world_time_t dt, float max_force) {
 
     data->dt = dt;
     data->max_force = max_force;
@@ -348,7 +348,7 @@ void step(step_helper_data_t *data, world_time_t dt, float max_force) {
     pthread_mutex_unlock(&data->mutex);
 }
 
-void *step_helper(void *arg) {
+static void *step_helper(void *arg) {
     step_helper_arg_t *helper_arg = arg;
     step_helper_data_t *data = helper_arg->data;
     world_t *world = data->world;
