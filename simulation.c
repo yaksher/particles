@@ -1,8 +1,9 @@
-#include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 #include <stdatomic.h>
 #include <pthread.h>
+#include <assert.h>
 #include <stdbool.h>
 #include <time.h>
 
@@ -15,8 +16,6 @@
 typedef double world_time_t;
 
 typedef struct {
-    point_t center;
-    vec_t velocity;
     float mass;
     float charge;
     float clustering;
@@ -25,8 +24,14 @@ typedef struct {
 } particle_t;
 
 typedef struct {
+    point_t pos;
+    vec_t vel;
+} phase_pair_t;
+
+typedef struct {
     size_t num_particles;
     particle_t *particles;
+    phase_pair_t *phases;
     bool paused;
     double gravity;
     double coulomb;
@@ -39,18 +44,27 @@ typedef struct {
     world_t *world;
     world_time_t dt;
     float max_force;
-    _Atomic size_t num_done;
-    pthread_mutex_t mutex;
+    phase_pair_t *next;
+    frame_t *next_frame;
+    size_t num_done;
+    uint64_t should_start_mask;
     pthread_cond_t main;
+    pthread_mutex_t main_mutex;
     pthread_cond_t workers;
+    pthread_mutex_t workers_mutex;
 } step_helper_data_t;
+
+// ensures that a bit-mask for the works fits inside the should_start_mask
+#define BYTE_BITS 8
+#define MAX_NUM_WORKERS ((int) sizeof(((step_helper_data_t *) NULL)->should_start_mask) * BYTE_BITS)
+typedef int assert_max_num_workers[MAX_NUM_WORKERS - NUM_WORKERS];
 
 typedef struct {
     step_helper_data_t *data;
     size_t worker_id;
 } step_helper_arg_t;
 
-static double clamp(double x, double min, double max) {
+double clamp(double x, double min, double max) {
     if (x < min) {
         return min;
     } else if (x > max) {
@@ -79,21 +93,23 @@ static float radius_of_mass(float mass) {
 }
 
 #define CHARGE_RANGE 5
-static float particle_shade(particle_t *particle) {
+static inline float particle_shade(particle_t *particle, phase_pair_t *phase) {
     // return (particle->charge + CHARGE_RANGE) / (2 * CHARGE_RANGE);
-    dist_t speed = sqrtf(particle->velocity.x * particle->velocity.x + particle->velocity.y * particle->velocity.y);
+    (void) particle;
+    dist_t speed = sqrtf(phase->vel.x * phase->vel.x + phase->vel.y * phase->vel.y);
     return 1 - expf(-speed / 300);
 }
+
 // compute the frame from the world state
 static frame_t *make_frame(world_t *world) {
     frame_t *frame = malloc(sizeof(frame_t) + world->num_particles * sizeof(circle_t));
     frame->num_circles = world->num_particles;
     circle_t *circles = frame->circles;
     for (size_t i = 0; i < frame->num_circles; i++) {
-        circles[i].center.x = world->particles[i].center.x;
-        circles[i].center.y = world->particles[i].center.y;
+        circles[i].center.x = world->phases[i].pos.x;
+        circles[i].center.y = world->phases[i].pos.y;
         circles[i].radius = world->particles[i].radius * 1.2;
-        circles[i].shade = particle_shade(&world->particles[i]);
+        circles[i].shade = particle_shade(&world->particles[i], &world->phases[i]);
     }
     return frame;
 }
@@ -148,12 +164,13 @@ static void init_world(world_t *world) {
         .clustering = 10,
         .global_clustering = 0.5 / NUM_PARTICLES,
         .num_particles = NUM_PARTICLES,
-        .particles = malloc(NUM_PARTICLES * sizeof(particle_t))
+        .particles = malloc(NUM_PARTICLES * sizeof(particle_t)),
+        .phases = malloc(NUM_PARTICLES * sizeof(phase_pair_t))
     };
-    world->particles[0].center.x = 0;
-    world->particles[0].center.y = 0;
-    world->particles[0].velocity.x = 0;
-    world->particles[0].velocity.y = 0;
+    world->phases[0].pos.x = 0;
+    world->phases[0].pos.y = 0;
+    world->phases[0].vel.x = 0;
+    world->phases[0].vel.y = 0;
     world->particles[0].mass = 100000;
     world->particles[0].charge = 0;
     world->particles[0].clustering = 0;
@@ -162,7 +179,6 @@ static void init_world(world_t *world) {
     const dist_t RING_RADIUS = 2000;
     dist_t velocity = 0.3 * sqrtf(world->gravity * world->particles[0].mass);
     for (size_t i = 1; i < world->num_particles; i++) {
-        particle_t particle;
         // Init position:
         // pick a random direction
         vec_t dir = {
@@ -179,29 +195,32 @@ static void init_world(world_t *world) {
             rad *= 0.2;
         }
         rad *= norm_rand() * 0.03 + 1;
+        phase_pair_t *phase = &world->phases[i];
         // scale the direction vector to the desired radius
-        particle.center.x = dir.x * rad;
-        particle.center.y = dir.y * rad;
+        phase->pos.x = dir.x * rad;
+        phase->pos.y = dir.y * rad;
 
         // Init velocity (approx. tangential to the ring):
         if (i < NUM_PARTICLES * 0.3) {
             velocity *= 0.01;
         }
-        particle.velocity.x = particle.center.y / sqrtf(rad) / rad * velocity + norm_rand() * 0.;
-        particle.velocity.y = -particle.center.x / sqrtf(rad) / rad * velocity + norm_rand() * 0.;
+        phase->vel.x = phase->pos.y / sqrtf(rad) / rad * velocity + norm_rand() * 0.;
+        phase->vel.y = -phase->pos.x / sqrtf(rad) / rad * velocity + norm_rand() * 0.;
         if (i < NUM_PARTICLES * 0.3) {
             velocity *= 100;
         }
 
         // Init mass, charge, clustering, and radius:
         // particle.radius = radius_of_mass(particle.mass);
-        particle.mass = fmax(10 + norm_rand() * 5, 0.01);
-        particle.radius = radius_of_mass(particle.mass);
+        particle_t particle = {
+            .mass = fmax(10 + norm_rand() * 5, 0.01),
+            .radius = radius_of_mass(particle.mass),
+            .charge = unif_rand() < 0.5 ? CHARGE_RANGE : -CHARGE_RANGE,
+            .clustering = 2,
+            .fixed = false,
+        };
         // particle.charge = clamp(norm_rand() * 5, -CHARGE_RANGE, CHARGE_RANGE);
         // particle.charge = unif_rand() * 2 * CHARGE_RANGE - CHARGE_RANGE;
-        particle.charge = unif_rand() < 0.5 ? CHARGE_RANGE : -CHARGE_RANGE;
-        particle.clustering = 2;
-        particle.fixed = false;
         world->particles[i] = particle;
     }
 }
@@ -229,16 +248,19 @@ static void process_input(input_t *input, world_t *world, world_time_t dt) {
             case INPUT_TYPE_SPAWN: {
                 input_spawn_t *spawn = &input->spawn;
                 world->particles = realloc(world->particles, (world->num_particles + 1) * sizeof(particle_t));
+                world->phases = realloc(world->phases, (world->num_particles + 1) * sizeof(phase_pair_t));
                 particle_t particle;
-                particle.center.x = spawn->point.x;
-                particle.center.y = spawn->point.y;
-                particle.velocity.x = 0;
-                particle.velocity.y = 0;
+                phase_pair_t phase;
+                phase.pos.x = spawn->point.x;
+                phase.pos.y = spawn->point.y;
+                phase.vel.x = 0;
+                phase.vel.y = 0;
                 particle.mass = spawn->mass;
                 particle.charge = spawn->charge;
                 particle.clustering = 1;
                 particle.radius = radius_of_mass(particle.mass);
                 world->particles[world->num_particles] = particle;
+                world->phases[world->num_particles] = phase;
                 world->num_particles++;
                 break;
             }
@@ -266,8 +288,8 @@ static void process_input(input_t *input, world_t *world, world_time_t dt) {
         free(cur);
     }
     for (size_t i = 0; force_point_active && i < world->num_particles; i++) {
-        dist_t dx = world->particles[i].center.x - force_point.point.x;
-        dist_t dy = world->particles[i].center.y - force_point.point.y;
+        dist_t dx = world->phases[i].pos.x - force_point.point.x;
+        dist_t dy = world->phases[i].pos.y - force_point.point.y;
         float dist_sq = dx * dx + dy * dy;
         dist_t dist = sqrtf(dist_sq);
         float force = 0;
@@ -284,8 +306,8 @@ static void process_input(input_t *input, world_t *world, world_time_t dt) {
             .x = force * dx / dist,
             .y = force * dy / dist
         };
-        world->particles[i].velocity.x += force_vec.x / world->particles[i].mass;
-        world->particles[i].velocity.y += force_vec.y / world->particles[i].mass;
+        world->phases[i].vel.x += force_vec.x / world->particles[i].mass;
+        world->phases[i].vel.y += force_vec.y / world->particles[i].mass;
     }
 }
 
@@ -305,10 +327,14 @@ void *simulate(void *arg) {
         .world = &world,
         .dt = TICK,
         .max_force = 2,
-        .num_done = NUM_WORKERS * 2,
-        .mutex = PTHREAD_MUTEX_INITIALIZER,
+        .next = NULL,
+        .next_frame = NULL,
+        .num_done = 0,
+        .should_start_mask = 0,
         .main = PTHREAD_COND_INITIALIZER,
-        .workers = PTHREAD_COND_INITIALIZER
+        .main_mutex = PTHREAD_MUTEX_INITIALIZER,
+        .workers = PTHREAD_COND_INITIALIZER,
+        .workers_mutex = PTHREAD_MUTEX_INITIALIZER,
     };
     for (size_t i = 0; i < NUM_WORKERS; i++) {
         step_helper_arg_t *arg = malloc(sizeof(step_helper_arg_t));
@@ -321,12 +347,13 @@ void *simulate(void *arg) {
         if (world.paused) {
             process_input(input, &world, 0);
         } else {
-            world_time_t dt = TICK + lost_time;
+            world_time_t dt = TICK;// + lost_time;
             process_input(input, &world, dt);
             step(&data, dt, 2);
         }
         free(atomic_exchange_explicit(&shared->frame, make_frame(&world), __ATOMIC_RELAXED));
         lost_time = (double) wait_tick(&last_tick, target_nsecs) / BILLION;
+        (void) lost_time;
     }
 
     return NULL;
@@ -334,18 +361,28 @@ void *simulate(void *arg) {
 
 
 static void step(step_helper_data_t *data, world_time_t dt, float max_force) {
-
     data->dt = dt;
     data->max_force = max_force;
-    atomic_store(&data->num_done, 0);
+    data->next = malloc(data->world->num_particles * sizeof(phase_pair_t));
+    // data->next_frame = malloc(sizeof(frame_t) + data->world->num_particles * sizeof(circle_t));
+
+    // wake up workers    
+    pthread_mutex_lock(&data->workers_mutex);
+    data->should_start_mask = ((uint64_t) 1 << NUM_WORKERS) - 1;
     pthread_cond_broadcast(&data->workers);
+    pthread_mutex_unlock(&data->workers_mutex);
 
     // wait for workers to finish
-    pthread_mutex_lock(&data->mutex);
-    while (atomic_load(&data->num_done) != 2 * NUM_WORKERS) {
-        pthread_cond_wait(&data->main, &data->mutex);
+    pthread_mutex_lock(&data->main_mutex);
+    while (data->num_done < NUM_WORKERS) {
+        pthread_cond_wait(&data->main, &data->main_mutex);
     }
-    pthread_mutex_unlock(&data->mutex);
+    data->num_done = 0;
+    pthread_mutex_unlock(&data->main_mutex);
+
+    // swap to next phase
+    free(data->world->phases);
+    data->world->phases = data->next;
 }
 
 static void *step_helper(void *arg) {
@@ -356,21 +393,30 @@ static void *step_helper(void *arg) {
     free(helper_arg);
 
     while (true) {
-        pthread_mutex_lock(&data->mutex);
-        while (atomic_load(&data->num_done) >= NUM_WORKERS) {
-            // wait for other workers to finish
-            pthread_cond_wait(&data->workers, &data->mutex);
+        pthread_mutex_lock(&data->workers_mutex);
+        while ((data->should_start_mask & ((uint64_t) 1 << worker_id)) == 0) {
+            pthread_cond_wait(&data->workers, &data->workers_mutex);
         }
-        pthread_mutex_unlock(&data->mutex);
+        data->should_start_mask &= ~((uint64_t) 1 << worker_id);
+        pthread_mutex_unlock(&data->workers_mutex);
+
         world_time_t dt = data->dt;
         float max_force = data->max_force;
+        phase_pair_t *next = data->next;
         size_t first_i = world->num_particles * worker_id / NUM_WORKERS;
         size_t last_i = world->num_particles * (worker_id + 1) / NUM_WORKERS;
         for (size_t i = first_i; i < last_i; i++) {
+            particle_t *pai = &world->particles[i];
+            phase_pair_t *pi = &next[i];
+            pi->pos.x = world->phases[i].pos.x;
+            pi->pos.y = world->phases[i].pos.y;
+            pi->vel.x = world->phases[i].vel.x;
+            pi->vel.y = world->phases[i].vel.y;
             for (size_t j = 0; j < world->num_particles; j++) {
-                particle_t *pi = &world->particles[i], *pj = &world->particles[j];
-                dist_t dx = pi->center.x - pj->center.x;
-                dist_t dy = pi->center.y - pj->center.y;
+                particle_t *paj = &world->particles[j];
+                phase_pair_t *pj = &world->phases[j];
+                dist_t dx = pi->pos.x - pj->pos.x;
+                dist_t dy = pi->pos.y - pj->pos.y;
                 float dist_sq = dx * dx + dy * dy;
                 dist_sq = fmaxf(dist_sq, 0.1);
                 dist_t dist = sqrtf(dist_sq);
@@ -384,7 +430,7 @@ static void *step_helper(void *arg) {
 
                 // gravity
                 #ifdef GRAVITY
-                force -= world->gravity * pi->mass * pj->mass / dist_sq;
+                force -= world->gravity * pai->mass * paj->mass / dist_sq;
                 #endif
 
                 // charge
@@ -394,9 +440,9 @@ static void *step_helper(void *arg) {
 
                 // collision
                 #ifdef COLLISION
-                dist_t surface_dist = fmaxf(3 + dist - pi->radius - pj->radius, 0.1);
+                dist_t surface_dist = fmaxf(3 + dist - pai->radius - paj->radius, 0.1);
                 if (surface_dist < 3) {
-                    force += world->collision * pi->mass / powf(surface_dist, 3);
+                    force += world->collision * pai->mass / powf(surface_dist, 3);
                 }
                 #endif
 
@@ -420,39 +466,22 @@ static void *step_helper(void *arg) {
                     .x = force * dx / dist,
                     .y = force * dy / dist
                 };
-                pi->velocity.x += force_vec.x / pi->mass;
-                pi->velocity.y += force_vec.y / pi->mass;
+                pi->vel.x += force_vec.x / pai->mass;
+                pi->vel.y += force_vec.y / pai->mass;
             }
         }
-
-        atomic_fetch_add(&data->num_done, 1);
-        pthread_cond_broadcast(&data->workers);
-        pthread_mutex_lock(&data->mutex);
-        while (atomic_load(&data->num_done) < NUM_WORKERS) {
-            pthread_cond_wait(&data->workers, &data->mutex);
-            // wait for other workers to finish
-        }
-        pthread_mutex_unlock(&data->mutex);
 
         // apply velocity
         for (size_t i = first_i; i < last_i; i++) {
-            world->particles[i].center.x += world->particles[i].velocity.x * dt * !world->particles[i].fixed;
-            world->particles[i].center.y += world->particles[i].velocity.y * dt * !world->particles[i].fixed;
+            phase_pair_t *pi = &next[i];
+            pi->pos.x += pi->vel.x * dt * !world->particles[i].fixed;
+            pi->pos.y += pi->vel.y * dt * !world->particles[i].fixed;
         }
 
-        atomic_fetch_add(&data->num_done, 1);
-        pthread_cond_broadcast(&data->workers);
-        pthread_mutex_lock(&data->mutex);
-        while (true) {
-            size_t num_done = atomic_load(&data->num_done);
-            if (num_done < NUM_WORKERS || num_done == 2 * NUM_WORKERS) {
-                break;
-            }
-            pthread_cond_wait(&data->workers, &data->mutex);
-            // wait for other workers to finish
-        }
-        pthread_mutex_unlock(&data->mutex);
+        pthread_mutex_lock(&data->main_mutex);
+        data->num_done++;
         pthread_cond_signal(&data->main);
+        pthread_mutex_unlock(&data->main_mutex);
     }
 
     return NULL;

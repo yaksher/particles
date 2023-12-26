@@ -272,7 +272,7 @@ void draw_frame(SDL_Renderer *renderer, view_t *state, shared_data_t *shared, do
             || center.y + radius < 0 || center.y - radius > state->window_height * state->pt_to_pixel) {
             continue;
         }
-        size_t min_points = radius * radius * 3 + 4;
+        size_t min_points = (radius + 1) * (radius + 1) * 3 + 4;
         if (point_buf_size < min_points) {
             point_buf_size = min_points;
             free(circle_point_buffer);
