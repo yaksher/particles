@@ -114,6 +114,16 @@ static frame_t *make_frame(world_t *world) {
     return frame;
 }
 
+static void init_frame(frame_t *frame, world_t *world, size_t first_i, size_t last_i) {
+    circle_t *circles = frame->circles;
+    for (size_t i = first_i; i < last_i; i++) {
+        circles[i].center.x = world->phases[i].pos.x;
+        circles[i].center.y = world->phases[i].pos.y;
+        circles[i].radius = world->particles[i].radius * 1.2;
+        circles[i].shade = particle_shade(&world->particles[i], &world->phases[i]);
+    }
+}
+
 // wait until the next tick
 // if the last tick took too long, return the time that needs to be
 // made up
@@ -344,14 +354,17 @@ void *simulate(void *arg) {
     }
     while (true) {
         input_t *input = atomic_exchange_explicit(&shared->input, NULL, __ATOMIC_RELAXED);
+        frame_t *next_frame;
         if (world.paused) {
             process_input(input, &world, 0);
+            next_frame = make_frame(&world);
         } else {
             world_time_t dt = TICK;// + lost_time;
             process_input(input, &world, dt);
             step(&data, dt, 2);
+            next_frame = data.next_frame;
         }
-        free(atomic_exchange_explicit(&shared->frame, make_frame(&world), __ATOMIC_RELAXED));
+        free(atomic_exchange_explicit(&shared->frame, next_frame, __ATOMIC_RELAXED));
         lost_time = (double) wait_tick(&last_tick, target_nsecs) / BILLION;
         (void) lost_time;
     }
@@ -364,7 +377,8 @@ static void step(step_helper_data_t *data, world_time_t dt, float max_force) {
     data->dt = dt;
     data->max_force = max_force;
     data->next = malloc(data->world->num_particles * sizeof(phase_pair_t));
-    // data->next_frame = malloc(sizeof(frame_t) + data->world->num_particles * sizeof(circle_t));
+    data->next_frame = malloc(sizeof(frame_t) + data->world->num_particles * sizeof(circle_t));
+    data->next_frame->num_circles = data->world->num_particles;
 
     // wake up workers    
     pthread_mutex_lock(&data->workers_mutex);
@@ -477,6 +491,8 @@ static void *step_helper(void *arg) {
             pi->pos.x += pi->vel.x * dt * !world->particles[i].fixed;
             pi->pos.y += pi->vel.y * dt * !world->particles[i].fixed;
         }
+
+        init_frame(data->next_frame, world, first_i, last_i);
 
         pthread_mutex_lock(&data->main_mutex);
         data->num_done++;
