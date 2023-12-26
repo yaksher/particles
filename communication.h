@@ -3,10 +3,12 @@
 #include <stdlib.h>
 #include <stdatomic.h>
 
+typedef float dist_t;
+
 // a point in world coordinates
 typedef struct {
-    float x;
-    float y;
+    dist_t x;
+    dist_t y;
 } point_t;
 
 typedef point_t vec_t;
@@ -14,7 +16,7 @@ typedef point_t vec_t;
 // a circle in world coordinates
 typedef struct {
     point_t center;
-    float radius;
+    dist_t radius;
     float shade;
 } circle_t;
 

@@ -20,7 +20,7 @@ typedef struct {
     float mass;
     float charge;
     float clustering;
-    float radius;
+    dist_t radius;
     bool fixed;
 } particle_t;
 
@@ -81,7 +81,7 @@ float radius_of_mass(float mass) {
 #define CHARGE_RANGE 5
 float particle_shade(particle_t *particle) {
     // return (particle->charge + CHARGE_RANGE) / (2 * CHARGE_RANGE);
-    float speed = sqrtf(particle->velocity.x * particle->velocity.x + particle->velocity.y * particle->velocity.y);
+    dist_t speed = sqrtf(particle->velocity.x * particle->velocity.x + particle->velocity.y * particle->velocity.y);
     return 1 - expf(-speed / 300);
 }
 // compute the frame from the world state
@@ -159,8 +159,8 @@ void init_world(world_t *world) {
     world->particles[0].clustering = 0;
     world->particles[0].radius = 50;
     world->particles[0].fixed = true;
-    const float RING_RADIUS = 2000;
-    float velocity = 0.3 * sqrtf(world->gravity * world->particles[0].mass);
+    const dist_t RING_RADIUS = 2000;
+    dist_t velocity = 0.3 * sqrtf(world->gravity * world->particles[0].mass);
     for (size_t i = 1; i < world->num_particles; i++) {
         particle_t particle;
         // Init position:
@@ -173,7 +173,7 @@ void init_world(world_t *world) {
         float inv_rad = sqrtf(dir.x * dir.x + dir.y * dir.y);
         // ensure the radius isn't 0
         inv_rad = fmaxf(inv_rad, 0.001);
-        float rad = RING_RADIUS / inv_rad;
+        dist_t rad = RING_RADIUS / inv_rad;
         // add some noise
         if (i < NUM_PARTICLES * 0.3) {
             rad *= 0.2;
@@ -266,10 +266,10 @@ void process_input(input_t *input, world_t *world, world_time_t dt) {
         free(cur);
     }
     for (size_t i = 0; force_point_active && i < world->num_particles; i++) {
-        float dx = world->particles[i].center.x - force_point.point.x;
-        float dy = world->particles[i].center.y - force_point.point.y;
+        dist_t dx = world->particles[i].center.x - force_point.point.x;
+        dist_t dy = world->particles[i].center.y - force_point.point.y;
         float dist_sq = dx * dx + dy * dy;
-        float dist = sqrtf(dist_sq);
+        dist_t dist = sqrtf(dist_sq);
         float force = 0;
         switch (force_point.force_type) {
             case FORCE_TYPE_GRAVITY:
@@ -369,11 +369,11 @@ void *step_helper(void *arg) {
         for (size_t i = first_i; i < last_i; i++) {
             for (size_t j = 0; j < world->num_particles; j++) {
                 particle_t *pi = &world->particles[i], *pj = &world->particles[j];
-                float dx = pi->center.x - pj->center.x;
-                float dy = pi->center.y - pj->center.y;
+                dist_t dx = pi->center.x - pj->center.x;
+                dist_t dy = pi->center.y - pj->center.y;
                 float dist_sq = dx * dx + dy * dy;
                 dist_sq = fmaxf(dist_sq, 0.1);
-                float dist = sqrtf(dist_sq);
+                dist_t dist = sqrtf(dist_sq);
 
                 // total repulsion between i and j
                 float force = 0;
@@ -394,7 +394,7 @@ void *step_helper(void *arg) {
 
                 // collision
                 #ifdef COLLISION
-                float surface_dist = fmaxf(3 + dist - pi->radius - pj->radius, 0.1);
+                dist_t surface_dist = fmaxf(3 + dist - pi->radius - pj->radius, 0.1);
                 if (surface_dist < 3) {
                     force += world->collision * pi->mass / powf(surface_dist, 3);
                 }
@@ -402,8 +402,8 @@ void *step_helper(void *arg) {
 
                 // clustering
                 #ifdef CLUSTERING
-                float target_cluster_dist = 5 + 8 * (pi->radius + pj->radius);
-                float dist_off = target_cluster_dist - dist;
+                dist_t target_cluster_dist = 5 + 8 * (pi->radius + pj->radius);
+                dist_t dist_off = target_cluster_dist - dist;
                 float cluster_func = dist_off / (target_cluster_dist * (1 + powf(dist_off/target_cluster_dist, 4)));
                 force += world->clustering * pi->clustering * pj->clustering * cluster_func;
                 #endif

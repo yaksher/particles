@@ -33,11 +33,11 @@ typedef struct {
     double pt_to_pixel;
 } view_t;
 
-float len_screen_to_world(view_t *state, pt_t len) {
+dist_t len_screen_to_world(view_t *state, pt_t len) {
     return len / state->scale;
 }
 
-int32_t len_world_to_screen(view_t *state, float dist) {
+int32_t len_world_to_screen(view_t *state, dist_t dist) {
     return dist * state->scale * state->pt_to_pixel;
 }
 
