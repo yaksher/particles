@@ -13,6 +13,14 @@ typedef struct {
 
 typedef point_t vec_t;
 
+static inline vec_t point_diff(point_t a, point_t b) {
+    return (vec_t){a.x - b.x, a.y - b.y};
+}
+
+static inline point_t point_add_scaled_vec(point_t a, vec_t b, float scale) {
+    return (point_t){a.x + b.x * scale, a.y + b.y * scale};
+}
+
 // a circle in world coordinates
 typedef struct {
     point_t center;
