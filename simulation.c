@@ -266,8 +266,9 @@ static void process_input(input_t *input, world_t *world, world_time_t dt) {
         free(cur);
     }
     for (size_t i = 0; force_point_active && i < world->num_particles; i++) {
-        vec_t d = point_diff(world->particles[i].center, force_point.point);
-        float dist_sq = d.x * d.x + d.y * d.y;
+        dist_t dx = world->particles[i].center.x - force_point.point.x;
+        dist_t dy = world->particles[i].center.y - force_point.point.y;
+        float dist_sq = dx * dx + dy * dy;
         dist_t dist = sqrtf(dist_sq);
         float force = 0;
         switch (force_point.force_type) {
@@ -279,12 +280,12 @@ static void process_input(input_t *input, world_t *world, world_time_t dt) {
                 break;
         }
         force *= dt;
-        // compute and apply acceleration
-        vec_t a = {
-            .x = force * d.x / dist / world->particles[i].mass,
-            .y = force * d.y / dist / world->particles[i].mass
+        vec_t force_vec = {
+            .x = force * dx / dist,
+            .y = force * dy / dist
         };
-        world->particles[i].velocity = point_add_scaled_vec(world->particles[i].velocity, a, 1);
+        world->particles[i].velocity.x += force_vec.x / world->particles[i].mass;
+        world->particles[i].velocity.y += force_vec.y / world->particles[i].mass;
     }
 }
 
@@ -367,12 +368,10 @@ static void *step_helper(void *arg) {
         size_t last_i = world->num_particles * (worker_id + 1) / NUM_WORKERS;
         for (size_t i = first_i; i < last_i; i++) {
             for (size_t j = 0; j < world->num_particles; j++) {
-                if (i == j) {
-                    continue;
-                }
                 particle_t *pi = &world->particles[i], *pj = &world->particles[j];
-                vec_t d = point_diff(pi->center, pj->center);
-                float dist_sq = d.x * d.x + d.y * d.y;
+                dist_t dx = pi->center.x - pj->center.x;
+                dist_t dy = pi->center.y - pj->center.y;
+                float dist_sq = dx * dx + dy * dy;
                 dist_sq = fmaxf(dist_sq, 0.1);
                 dist_t dist = sqrtf(dist_sq);
 
@@ -416,12 +415,13 @@ static void *step_helper(void *arg) {
                 // scale force by time
                 force *= dt;
 
-                // compute and apply acceleration
-                vec_t a = {
-                    .x = force * d.x / dist / pi->mass,
-                    .y = force * d.y / dist / pi->mass
+                // apply force
+                vec_t force_vec = {
+                    .x = force * dx / dist,
+                    .y = force * dy / dist
                 };
-                pi->velocity = point_add_scaled_vec(pi->velocity, a, 1);
+                pi->velocity.x += force_vec.x / pi->mass;
+                pi->velocity.y += force_vec.y / pi->mass;
             }
         }
 
@@ -436,11 +436,8 @@ static void *step_helper(void *arg) {
 
         // apply velocity
         for (size_t i = first_i; i < last_i; i++) {
-            world->particles[i].center = point_add_scaled_vec(
-                world->particles[i].center, 
-                world->particles[i].velocity,
-                dt * !world->particles[i].fixed
-            );
+            world->particles[i].center.x += world->particles[i].velocity.x * dt * !world->particles[i].fixed;
+            world->particles[i].center.y += world->particles[i].velocity.y * dt * !world->particles[i].fixed;
         }
 
         atomic_fetch_add(&data->num_done, 1);
