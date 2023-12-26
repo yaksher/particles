@@ -27,10 +27,8 @@ typedef struct {
 typedef struct {
     size_t num;
     size_t cap;
-    dist_t *px;
-    dist_t *py;
-    dist_t *vx;
-    dist_t *vy;
+    point_t *pos;
+    vec_t *vel;
     float *mass;
     float *charge;
     float *clustering;
@@ -48,14 +46,8 @@ typedef struct {
 
 static inline particle_t parts_get(particles_t *parts, size_t i) {
     return (particle_t) {
-        .center = (point_t) {
-            .x = parts->px[i],
-            .y = parts->py[i]
-        },
-        .velocity = (vec_t) {
-            .x = parts->vx[i],
-            .y = parts->vy[i]
-        },
+        .center = parts->pos[i],
+        .velocity = parts->vel[i],
         .mass = parts->mass[i],
         .charge = parts->charge[i],
         .clustering = parts->clustering[i],
@@ -65,10 +57,8 @@ static inline particle_t parts_get(particles_t *parts, size_t i) {
 }
 
 static inline void parts_set(particles_t *parts, size_t i, particle_t particle) {
-    parts->px[i] = particle.center.x;
-    parts->py[i] = particle.center.y;
-    parts->vx[i] = particle.velocity.x;
-    parts->vy[i] = particle.velocity.y;
+    parts->pos[i] = particle.center;
+    parts->vel[i] = particle.velocity;
     parts->mass[i] = particle.mass;
     parts->charge[i] = particle.charge;
     parts->clustering[i] = particle.clustering;
@@ -80,20 +70,16 @@ static inline void parts_init(particles_t *parts, size_t num) {
     parts->num = num;
     parts->cap = num;
     if (num == 0) {
-        parts->px = NULL;
-        parts->py = NULL;
-        parts->vx = NULL;
-        parts->vy = NULL;
+        parts->pos = NULL;
+        parts->vel = NULL;
         parts->mass = NULL;
         parts->charge = NULL;
         parts->clustering = NULL;
         parts->radius = NULL;
         parts->fixed = NULL;
     } else {
-        parts->px = malloc(num * sizeof(dist_t));
-        parts->py = malloc(num * sizeof(dist_t));
-        parts->vx = malloc(num * sizeof(dist_t));
-        parts->vy = malloc(num * sizeof(dist_t));
+        parts->pos = malloc(num * sizeof(point_t));
+        parts->vel = malloc(num * sizeof(vec_t));
         parts->mass = malloc(num * sizeof(float));
         parts->charge = malloc(num * sizeof(float));
         parts->clustering = malloc(num * sizeof(float));
@@ -105,10 +91,8 @@ static inline void parts_init(particles_t *parts, size_t num) {
 static inline void parts_push(particles_t *parts, particle_t new) {
     if (parts->num == parts->cap) {
         parts->cap = parts->cap > 0 ? 2 * parts->cap : 4;
-        parts->px = realloc(parts->px, parts->cap * sizeof(dist_t));
-        parts->py = realloc(parts->py, parts->cap * sizeof(dist_t));
-        parts->vx = realloc(parts->vx, parts->cap * sizeof(dist_t));
-        parts->vy = realloc(parts->vy, parts->cap * sizeof(dist_t));
+        parts->pos = realloc(parts->pos, parts->cap * sizeof(point_t));
+        parts->vel = realloc(parts->vel, parts->cap * sizeof(vec_t));
         parts->mass = realloc(parts->mass, parts->cap * sizeof(float));
         parts->charge = realloc(parts->charge, parts->cap * sizeof(float));
         parts->clustering = realloc(parts->clustering, parts->cap * sizeof(float));
@@ -120,10 +104,8 @@ static inline void parts_push(particles_t *parts, particle_t new) {
 }
 
 static inline void parts_destroy(particles_t *parts) {
-    free(parts->px);
-    free(parts->py);
-    free(parts->vx);
-    free(parts->vy);
+    free(parts->pos);
+    free(parts->vel);
     free(parts->mass);
     free(parts->charge);
     free(parts->clustering);
@@ -373,8 +355,8 @@ static void process_input(input_t *input, world_t *world, world_time_t dt) {
         free(cur);
     }
     for (size_t i = 0; force_point_active && i < world->particles.num; i++) {
-        dist_t dx = world->particles.px[i] - force_point.point.x;
-        dist_t dy = world->particles.py[i] - force_point.point.y;
+        dist_t dx = world->particles.pos[i].x - force_point.point.x;
+        dist_t dy = world->particles.pos[i].y - force_point.point.y;
         float dist_sq = dx * dx + dy * dy;
         dist_t dist = sqrtf(dist_sq);
         float force = 0;
@@ -391,8 +373,8 @@ static void process_input(input_t *input, world_t *world, world_time_t dt) {
             .x = force * dx / dist,
             .y = force * dy / dist
         };
-        world->particles.vx[i] += force_vec.x / world->particles.mass[i];
-        world->particles.vx[i] += force_vec.y / world->particles.mass[i];
+        world->particles.vel[i].x += force_vec.x / world->particles.mass[i];
+        world->particles.vel[i].y += force_vec.y / world->particles.mass[i];
     }
 }
 
@@ -476,8 +458,8 @@ static void *step_helper(void *arg) {
         particles_t *parts = &world->particles;
         for (size_t i = first_i; i < last_i; i++) {
             for (size_t j = 0; j < world->particles.num; j++) {
-                dist_t dx = parts->px[i] - parts->px[j];
-                dist_t dy = parts->py[i] - parts->py[j];
+                dist_t dx = parts->pos[i].x - parts->pos[j].x;
+                dist_t dy = parts->pos[i].y - parts->pos[j].y;
                 float dist_sq = dx * dx + dy * dy;
                 dist_sq = fmaxf(dist_sq, 0.1);
                 dist_t dist = sqrtf(dist_sq);
@@ -530,8 +512,8 @@ static void *step_helper(void *arg) {
                     .x = a_mag * dx / dist,
                     .y = a_mag * dy / dist
                 };
-                parts->vx[i] += a.x;
-                parts->vy[i] += a.y;
+                parts->vel[i].x += a.x;
+                parts->vel[i].y += a.y;
             }
         }
 
@@ -546,8 +528,8 @@ static void *step_helper(void *arg) {
 
         // apply velocity
         for (size_t i = first_i; i < last_i; i++) {
-            parts->px[i] += parts->vx[i] * dt * !parts->fixed[i];
-            parts->py[i] += parts->vy[i] * dt * !parts->fixed[i];
+            parts->pos[i].x += parts->vel[i].x * dt * !parts->fixed[i];
+            parts->pos[i].y += parts->vel[i].y * dt * !parts->fixed[i];
         }
 
         atomic_fetch_add(&data->num_done, 1);
