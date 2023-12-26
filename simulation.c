@@ -149,7 +149,7 @@ static uint64_t wait_tick(struct timespec *last_tick, uint64_t target_nsecs) {
     } else {
         rem = elapsed_nsecs - target_nsecs;
     }
-    *last_tick = now;
+    clock_gettime(CLOCK_MONOTONIC, last_tick);
     return rem;
 }
 
