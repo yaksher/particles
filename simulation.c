@@ -136,10 +136,9 @@ static uint64_t wait_tick(struct timespec *last_tick, uint64_t target_nsecs) {
     static double mean_tick_time = 0;
     mean_tick_time = 0.9 * mean_tick_time + 0.1 * (double) elapsed_nsecs / BILLION;
     fprintf(stderr, "\rMean tick time %0.5fs.", mean_tick_time);
+    uint64_t rem = 0;
     if (elapsed_nsecs > BILLION) {
         fprintf(stderr, "warning: frame rate below 1 fps\n");
-        *last_tick = now;
-        return 0;
     } else if (elapsed_nsecs < target_nsecs) {
         struct timespec rem = {
             .tv_sec = 0,
@@ -147,11 +146,11 @@ static uint64_t wait_tick(struct timespec *last_tick, uint64_t target_nsecs) {
         };
         nanosleep(&rem, NULL);
         *last_tick = now;
-        return 0;
     } else {
-        *last_tick = now;
-        return elapsed_nsecs - target_nsecs;
+        rem = elapsed_nsecs - target_nsecs;
     }
+    *last_tick = now;
+    return rem;
 }
 
 // FEATURES:
